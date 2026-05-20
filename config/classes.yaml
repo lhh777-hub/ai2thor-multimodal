@@ -1,0 +1,205 @@
+# ==========================================================================
+#  YOLO 类别配置文件
+#
+#  想要检测新物体？在这里添加类别，然后重新采集数据 + 微调即可。
+#  不用改任何 Python 代码。
+#
+#  names:           YOLO 输出的全部类别 (按顺序, class_id = 下标)
+#  thor_to_names:   AI2-THOR 物体名 → YOLO 类别名的映射
+# ==========================================================================
+
+names:
+  # ---- COCO 原始 80 类 (预训练权重, 不建议删除) ----
+  - person
+  - bicycle
+  - car
+  - motorcycle
+  - airplane
+  - bus
+  - train
+  - truck
+  - boat
+  - traffic light
+  - fire hydrant
+  - stop sign
+  - parking meter
+  - bench
+  - bird
+  - cat
+  - dog
+  - horse
+  - sheep
+  - cow
+  - elephant
+  - bear
+  - zebra
+  - giraffe
+  - backpack
+  - umbrella
+  - handbag
+  - tie
+  - suitcase
+  - frisbee
+  - skis
+  - snowboard
+  - sports ball
+  - kite
+  - baseball bat
+  - baseball glove
+  - skateboard
+  - surfboard
+  - tennis racket
+  - bottle
+  - wine glass
+  - cup
+  - fork
+  - knife
+  - spoon
+  - bowl
+  - banana
+  - apple
+  - sandwich
+  - orange
+  - broccoli
+  - carrot
+  - hot dog
+  - pizza
+  - donut
+  - cake
+  - chair
+  - couch
+  - potted plant
+  - bed
+  - dining table
+  - toilet
+  - tv
+  - laptop
+  - mouse
+  - remote
+  - keyboard
+  - cell phone
+  - microwave
+  - oven
+  - toaster
+  - sink
+  - refrigerator
+  - book
+  - clock
+  - vase
+  - scissors
+  - teddy bear
+  - hair drier
+  - toothbrush
+  - apple
+  - bread
+  - butterknife
+  - cabinet
+  - coffeemachine
+  - countertop
+  - creditcard
+  - dishsponge
+  - drawer
+  - egg
+  - faucet
+  - floor
+  - fork
+  - garbagecan
+  - kettle
+  - knife
+  - lettuce
+  - lightswitch
+  - pan
+  - papertowelroll
+  - peppershaker
+  - plate
+  - pot
+  - potato
+  - saltshaker
+  - shelf
+  - shelvingunit
+  - sinkbasin
+  - soapbottle
+  - spatula
+  - spoon
+  - statue
+  - stool
+  - stoveknob
+  - tomato
+  - vase
+  - window
+  - winebottle
+  - door
+
+
+  # ---- 自定义类 (需要自己采集数据 + 微调后才能检测) ----
+  # 添加示例: 去掉下面注释, 然后把 COCO_TO_THOR 映射也加上
+  # - door
+  # - window
+  # - cabinet
+
+# AI2-THOR 物体类型 → YOLO 类别名
+thor_to_names:
+  Chair:           chair
+  Sofa:            couch
+  Television:      tv
+  TV:              tv
+  Fridge:          refrigerator
+  Refrigerator:    refrigerator
+  Microwave:       microwave
+  StoveBurner:     oven
+  Toaster:         toaster
+  Sink:            sink
+  Toilet:          toilet
+  Bed:             bed
+  HousePlant:      potted plant
+  DiningTable:     dining table
+  Book:            book
+  Mug:             cup
+  Cup:             cup
+  Bowl:            bowl
+  Bottle:          bottle
+  RemoteControl:   remote
+  CellPhone:       cell phone
+  Laptop:          laptop
+  Desktop:         laptop
+  # 自定义类的映射示例:
+  Door:          door
+  Apple: apple
+  Bread: bread
+  ButterKnife: butterknife
+  Cabinet: cabinet
+  CoffeeMachine: coffeemachine
+  CounterTop: countertop
+  CreditCard: creditcard
+  DishSponge: dishsponge
+  Drawer: drawer
+  Egg: egg
+  Faucet: faucet
+  Floor: floor
+  Fork: fork
+  GarbageCan: garbagecan
+  Kettle: kettle
+  Knife: knife
+  Lettuce: lettuce
+  LightSwitch: lightswitch
+  Pan: pan
+  PaperTowelRoll: papertowelroll
+  PepperShaker: peppershaker
+  Plate: plate
+  Pot: pot
+  Potato: potato
+  SaltShaker: saltshaker
+  Shelf: shelf
+  ShelvingUnit: shelvingunit
+  SinkBasin: sinkbasin
+  SoapBottle: soapbottle
+  Spatula: spatula
+  Spoon: spoon
+  Statue: statue
+  Stool: stool
+  StoveKnob: stoveknob
+  Tomato: tomato
+  Vase: vase
+  Window: window
+  WineBottle: winebottle
+

@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+
+# Virtual environment
+venv/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Claude Code
+.claude/
+
+# Environment (contains API keys)
+.env
+
+# Model weights (download separately)
+weights/*.pt
+*.pt
+
+# Generated data (large files)
+data/
+data_val/
+runs/
+outputs/
+
+# OS
+.DS_Store
+Thumbs.db
