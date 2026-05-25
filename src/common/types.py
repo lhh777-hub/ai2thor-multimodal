@@ -109,6 +109,7 @@ class Detection:
     confidence: float             # YOLO confidence [0, 1]
     screen_position: str          # "left" | "center" | "right" (derived from bbox center)
     distance_level: str = ""      # "NEAR" | "MEDIUM" | "FAR" (filled by depth estimator)
+    distance_meters: float = 0.0  # estimated distance in metres (0 = unknown)
     clip_score: float = 0.0       # CLIP similarity score [0, 1] (filled by verifier)
 
 

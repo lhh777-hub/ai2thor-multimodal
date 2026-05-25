@@ -90,7 +90,6 @@ names:
   - teddy bear
   - hair drier
   - toothbrush
-  - apple
   - bread
   - butterknife
   - cabinet
@@ -102,10 +101,8 @@ names:
   - egg
   - faucet
   - floor
-  - fork
   - garbagecan
   - kettle
-  - knife
   - lettuce
   - lightswitch
   - pan
@@ -120,18 +117,17 @@ names:
   - sinkbasin
   - soapbottle
   - spatula
-  - spoon
   - statue
   - stool
   - stoveknob
   - tomato
-  - vase
   - window
   - winebottle
   - door
 
 
   # ---- 自定义类 (需要自己采集数据 + 微调后才能检测) ----
+  # 注意：apple, fork, knife, spoon, vase 已在 COCO 80 中，无需重复添加
   # 添加示例: 去掉下面注释, 然后把 COCO_TO_THOR 映射也加上
   # - door
   # - window

@@ -45,19 +45,21 @@ def _print_detections(detections) -> None:
     if not detections:
         print("  (nothing detected)")
         return
-    header = f"  {'Label':<18s} {'YOLO':>6s}"
+    header = f"  {'Label':<18s} {'Conf':>6s}"
     cols = 1
     if any(getattr(d, "clip_score", 0) > 0 for d in detections):
         header += f"  {'CLIP':>6s}"
         cols += 1
-    header += f"  {'Pos':<8s}  {'Dist':<8s}"
+    header += f"  {'Pos':<8s}  {'Dist':>8s}  {'Dist(m)':>8s}"
     print(header)
-    print(f"  {'-'*18} {'-'*6}" + f"  {'-'*6}  {'-'*8}  {'-'*8}" if cols > 1 else f"  {'-'*8}  {'-'*8}")
+    sep = f"  {'-'*18} {'-'*6}" + (f"  {'-'*6}" if cols > 1 else "")
+    sep += f"  {'-'*8}  {'-'*8}  {'-'*8}"
+    print(sep)
     for d in detections:
         line = f"  {d.label:<18s} {d.confidence:5.2f}"
         if cols > 1:
             line += f"   {d.clip_score:5.2f}"
-        line += f"   {d.screen_position:<8s}  {d.distance_level:<8s}"
+        line += f"   {d.screen_position:<8s}  {d.distance_level:<8s}  {d.distance_meters:>6.2f}"
         print(line)
 
 
@@ -304,7 +306,7 @@ def run(scene: str = "FloorPlan1", width: int = 800, height: int = 600,
         print(f"  Commands: wasd=move  detect=perceive  clip/prior=toggle  quit=exit\n")
 
         if auto_detect:
-            dets = pipeline.process(result.sensor_data.rgb)
+            dets = pipeline.process(result.sensor_data.rgb, controller=ctrl)
             _print_detections(dets)
 
         while True:
@@ -330,7 +332,7 @@ def run(scene: str = "FloorPlan1", width: int = 800, height: int = 600,
                 continue
 
             if head == "detect":
-                dets = pipeline.process(result.sensor_data.rgb)
+                dets = pipeline.process(result.sensor_data.rgb, controller=ctrl)
                 _print_detections(dets)
                 continue
 
@@ -371,7 +373,7 @@ def run(scene: str = "FloorPlan1", width: int = 800, height: int = 600,
                 print(f"  [{ctrl.step_count:03d}] ({p.x:5.2f},{p.y:4.2f},{p.z:5.2f})  "
                       f"head={result.agent_state.heading_deg:.0f} deg  [{status}]")
                 if auto_detect:
-                    dets = pipeline.process(result.sensor_data.rgb)
+                    dets = pipeline.process(result.sensor_data.rgb, controller=ctrl)
                     _print_detections(dets)
                 continue
 

@@ -21,9 +21,9 @@ venv/
 # Environment (contains API keys)
 .env
 
-# Model weights (download separately)
-weights/*.pt
+# Model weights (base model auto-downloaded by ultralytics)
 *.pt
+!weights/best.pt
 
 # Generated data (large files)
 data/

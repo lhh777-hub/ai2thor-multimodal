@@ -4,12 +4,12 @@
 
 ## 项目状态
 
-**Phase 2 进行中** — 感知管道已完成，微调数据已采集，待训练和决策模块开发。
+**Phase 2 已完成** — 感知管道 + 微调全流程跑通，进入 Phase 3 决策模块开发。
 
 | Phase | 内容 | 状态 |
 |-------|------|------|
 | Phase 1 | 场景控制 + A\* 寻路 + RGB 采集 + 手动 Demo | ✅ 完成 |
-| Phase 2 | YOLO 检测 + 距离估计 + CLIP 验证 + 微调基础设施 | ⚠️ 感知完成，微调训练待执行 |
+| Phase 2 | YOLO 检测 + 距离估计 + CLIP 验证 + 微调训练 | ✅ 完成 (mAP@0.5: 0.027 → 0.672) |
 | Phase 3 | 决策模块 (Rule Policy + LLM Policy) | ❌ 未开始 |
 | Phase 4 | Episode Runner + 评估指标 (SR, SPL) + 可视化 | ❌ 未开始 |
 | Phase 5 | 端到端集成 + 批量实验 | ❌ 未开始 |
@@ -43,7 +43,7 @@ embodied-agent/
 │       ├── manual.py        #   手动控制 Demo (wasd 移动 + A* 导航 + detect)
 │       └── perceive.py      #   感知专用 Demo (YOLO + CLIP + 场景先验)
 ├── config/
-│   └── classes.yaml         # 类别定义 (COCO 80 + AI2-THOR 扩展 119 类)
+│   └── classes.yaml         # 类别定义 (COCO 80 + AI2-THOR 扩展, 114 类)
 ├── docs/
 │   ├── 开发日志.md           # 开发日志
 │   ├── bugfix/              #   问题修复记录
@@ -67,7 +67,7 @@ AI2-THOR → Observation(rgb, position, heading)
     ↓
 [CLIPVerifier] + [ScenePrior] → verified detections
     ↓
-[DepthEstimator] → distance_level (NEAR/MEDIUM/FAR)
+[DepthEstimator] → distance_level (NEAR/MEDIUM/FAR) + distance_meters
     ↓
 [DecisionPolicy] → ActionDecision   ← Phase 3 待实现
     ↓
@@ -121,11 +121,14 @@ cp .env.example .env
 ### 运行
 
 ```bash
-# 手动控制 Demo（wasd 移动 + A* 导航 + VLM 描述）
+# 手动控制 Demo（wasd 移动 + A* 导航 + VLM 描述 + detect 感知）
 python src/cli/manual.py --scene FloorPlan1
 
-# 感知 Demo（YOLO 检测 + CLIP + 场景先验）
+# 感知 Demo（YOLO 检测 + CLIP + 场景先验 + 距离数值）
 python src/cli/perceive.py --scene FloorPlan1
+
+# 感知 Demo（使用微调后模型）
+python src/cli/perceive.py --model runs/detect/runs/train/weights/best.pt --scene FloorPlan11
 
 # 诊断：检查场景物体映射
 python src/cli/perceive.py --check-classes --scene FloorPlan1
@@ -133,15 +136,20 @@ python src/cli/perceive.py --check-classes --scene FloorPlan1
 # 诊断：可视化 ground-truth 标注
 python src/cli/perceive.py --verify-labels --scene FloorPlan1
 
-# 数据采集（已完成，重新采集可覆盖）
+# 数据采集
 python src/perception/finetune/collect.py --scenes 10 --steps 200
 
 # 微调前评估
-python src/perception/finetune/eval.py --model weights/yolov8n.pt --num-scenes 5
+python src/perception/finetune/eval.py --model yolov8n.pt --num-scenes 5
 
 # 微调训练
 python src/perception/finetune/train.py --data data/data.yaml --epochs 50
+
+# 微调后评估（注意：实际路径可能嵌套，检查 runs/ 目录确认）
+python src/perception/finetune/eval.py --model runs/detect/runs/train/weights/best.pt --num-scenes 5
 ```
+
+> **注意**: 所有命令必须在项目根目录运行，否则 YOLO 的输出路径可能嵌套（如 `runs/detect/runs/train/` 而非 `runs/train/`）。
 
 ## 技术栈
 

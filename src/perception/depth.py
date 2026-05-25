@@ -2,10 +2,15 @@
 Distance estimation from monocular RGB.
 
 Two strategies:
-- ``HeuristicDepth`` — bbox area ratio (fast, no GPU, good enough for most cases)
+- ``HeuristicDepth`` — bbox area ratio + pinhole-camera distance estimate
 - ``DepthAnythingV2`` — monocular depth model (more accurate, requires GPU + extra deps)
+
+Each ``estimate()`` returns ``(level, metres)`` where *level* is one of
+``"NEAR"`` / ``"MEDIUM"`` / ``"FAR"`` and *metres* is the estimated distance
+(or 0.0 when unavailable).
 """
 
+import math
 from abc import ABC, abstractmethod
 
 import numpy as np
@@ -15,44 +20,75 @@ from src.common.logger import setup_logger
 
 logger = setup_logger("depth")
 
+# Default distance thresholds (metres)
+_NEAR_LIMIT = 1.5   # ≤ 1.5 m  → NEAR
+_FAR_LIMIT  = 3.0   # ≥ 3.0 m  → FAR  (1.5–3.0 → MEDIUM)
+
+
+def _level_from_metres(metres: float) -> str:
+    if metres <= _NEAR_LIMIT:
+        return "NEAR"
+    elif metres <= _FAR_LIMIT:
+        return "MEDIUM"
+    return "FAR"
+
+
+# ---------------------------------------------------------------------------
+# Abstract
+# ---------------------------------------------------------------------------
 
 class DepthEstimator(ABC):
     """Abstract interface for distance estimation."""
 
     @abstractmethod
-    def estimate(self, rgb: np.ndarray, detection: Detection) -> str:
-        """Return 'NEAR', 'MEDIUM', or 'FAR' for *detection*."""
+    def estimate(self, rgb: np.ndarray, detection: Detection) -> tuple[str, float]:
+        """Return ``(level, metres)`` for *detection*."""
         ...
 
 
 # ---------------------------------------------------------------------------
-# Heuristic (bbox area ratio)
+# Heuristic (bbox area ratio + pinhole model)
 # ---------------------------------------------------------------------------
 
 class HeuristicDepth(DepthEstimator):
-    """Estimate distance from the fraction of the image that a bounding box covers.
+    """Estimate distance from the fraction of the image a bounding box covers.
 
-    A large bbox → object is NEAR; a small bbox → object is FAR.
+    Uses a pinhole-camera model to produce a rough metric estimate, then
+    thresholds it to NEAR / MEDIUM / FAR.  Assumes a typical indoor-object
+    size of *assumed_size* metres.
     """
 
-    def __init__(self, near_ratio: float = 0.15, far_ratio: float = 0.05):
-        self.near_ratio = near_ratio
-        self.far_ratio = far_ratio
+    def __init__(self, assumed_size: float = 0.4,
+                 near_limit: float = _NEAR_LIMIT,
+                 far_limit: float = _FAR_LIMIT,
+                 fov_deg: float = 90.0):
+        self.assumed_size = assumed_size
+        self.near_limit = near_limit
+        self.far_limit = far_limit
+        self.fov_deg = fov_deg
 
-    def estimate(self, rgb: np.ndarray, detection: Detection) -> str:
-        img_area = rgb.shape[0] * rgb.shape[1]
-        bbox_area = detection.bbox.width * detection.bbox.height
-        ratio = bbox_area / img_area
+    def estimate(self, rgb: np.ndarray, detection: Detection) -> tuple[str, float]:
+        metres = self._estimate_metres(rgb, detection)
+        level = _level_from_metres(metres)
+        logger.debug("%s: %.2f m → %s", detection.label, metres, level)
+        return level, metres
 
-        if ratio > self.near_ratio:
-            level = "NEAR"
-        elif ratio > self.far_ratio:
-            level = "MEDIUM"
-        else:
-            level = "FAR"
+    def _estimate_metres(self, rgb: np.ndarray, detection: Detection) -> float:
+        """Pinhole-camera distance from bbox height.
 
-        logger.debug("%s: ratio=%.4f → %s", detection.label, ratio, level)
-        return level
+            distance = (real_size × focal_px) / bbox_height_px
+
+        *focal_px* is derived from the vertical FOV and image height.
+        """
+        img_h = rgb.shape[0]
+        bbox_h = detection.bbox.height
+        if bbox_h <= 0:
+            return 0.0
+
+        fov_rad = math.radians(self.fov_deg)
+        focal_px = (img_h / 2.0) / math.tan(fov_rad / 2.0)
+        metres = (self.assumed_size * focal_px) / bbox_h
+        return round(float(metres), 2)
 
 
 # ---------------------------------------------------------------------------
@@ -75,7 +111,7 @@ class DepthAnythingV2(DepthEstimator):
         self._fallback = HeuristicDepth()
         self._tried_load = False
 
-    def estimate(self, rgb: np.ndarray, detection: Detection) -> str:
+    def estimate(self, rgb: np.ndarray, detection: Detection) -> tuple[str, float]:
         self._try_load()
         if self._model is None:
             return self._fallback.estimate(rgb, detection)
@@ -91,18 +127,22 @@ class DepthAnythingV2(DepthEstimator):
         y2 = min(depth_map.shape[0], int(detection.bbox.y2))
 
         if x2 <= x1 or y2 <= y1:
-            return "FAR"
+            return "FAR", 0.0
 
         bbox_depth = depth_map[y1:y2, x1:x2]
         avg = float(np.mean(bbox_depth))
         full_mean = float(np.mean(depth_map))
 
         norm = avg / full_mean if full_mean > 0 else 0.5
+        # Metric distance is approximate — DA V2 produces relative depth.
+        # We map the normalised value to a rough metre scale (0–5 m range).
+        metres = round(norm * 5.0, 2)
+
         if norm < self.near_threshold:
-            return "NEAR"
+            return "NEAR", metres
         elif norm < self.far_threshold:
-            return "MEDIUM"
-        return "FAR"
+            return "MEDIUM", metres
+        return "FAR", metres
 
     def _try_load(self):
         if self._tried_load:

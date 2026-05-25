@@ -162,12 +162,13 @@ def _print_detections(detections, img_w: int) -> None:
     if not detections:
         print("  (nothing detected)")
         return
-    print(f"  {'Label':<18s} {'Conf':>6s}  {'Pos':<8s}  {'Dist':<8s}  BBox")
-    print(f"  {'-'*18} {'-'*6}  {'-'*8}  {'-'*8}  {'-'*20}")
+    print(f"  {'Label':<18s} {'Conf':>6s}  {'Pos':<8s}  {'Dist':>8s}  {'Dist(m)':>8s}  BBox")
+    print(f"  {'-'*18} {'-'*6}  {'-'*8}  {'-'*8}  {'-'*8}  {'-'*20}")
     for d in detections:
         b = d.bbox
         print(f"  {d.label:<18s} {d.confidence:5.2f}   {d.screen_position:<8s}  "
-              f"{d.distance_level:<8s}  ({b.x1:4.0f},{b.y1:4.0f})-({b.x2:4.0f},{b.y2:4.0f})")
+              f"{d.distance_level:<8s}  {d.distance_meters:>6.2f}   "
+              f"({b.x1:4.0f},{b.y1:4.0f})-({b.x2:4.0f},{b.y2:4.0f})")
 
 
 # ---------------------------------------------------------------------------
@@ -323,7 +324,7 @@ def run(scene: str = "FloorPlan1", width: int = 800, height: int = 600) -> None:
                     continue
                 print("  Running YOLO detection ...")
                 try:
-                    dets = pipeline.process(result.sensor_data.rgb)
+                    dets = pipeline.process(result.sensor_data.rgb, controller=ctrl)
                     _print_detections(dets, width)
                 except Exception as e:
                     print(f"  Detection failed: {e}")
