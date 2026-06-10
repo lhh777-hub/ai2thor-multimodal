@@ -98,8 +98,8 @@ class ScenePrior:
         return self._room
 
     def apply(self, detections: list[Detection]) -> list[Detection]:
-        """Multiply each detection's confidence by its room-prior weight."""
+        """Multiply each detection's confidence by its room-prior weight, clamped to [0, 1]."""
         for d in detections:
             w = self._weights.get(d.label, self._default_weight)
-            d.confidence = round(d.confidence * w, 4)
+            d.confidence = min(round(d.confidence * w, 4), 1.0)
         return detections

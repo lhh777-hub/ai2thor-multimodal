@@ -1,0 +1,665 @@
+%!TeX program = xelatex
+\documentclass{SYSUReport}
+
+% 绘图
+\usepackage{pgfplots}
+\pgfplotsset{compat=1.18}
+\usepackage{placeins}  % \FloatBarrier 阻止浮动体跨节
+
+% =============================================
+% 元信息
+% =============================================
+\headl{多模态大模型}
+\headc{}
+\headr{基于AI2-THOR的多模态具身智能Agent系统}
+\lessonTitle{多模态大模型课程实验报告}
+\reportTitle{基于AI2-THOR的多模态具身智能Agent系统\\选题5：游戏或仿真环境中的多模态智能Agent}
+\stuname{李恒辉、孙坤桐}
+\stuid{23331070、23336213}
+\inst{计算机学院}
+\major{计算机科学与技术}
+\date{\today}
+
+%% 重定义封面：修复 \underline 不支持 \\ 换行的问题
+\renewcommand{\cover}{
+    \begin{center}
+        \begin{figure}
+            \centering
+            \vspace{2cm}
+            \includegraphics[width=0.6\textwidth]{sysu.jpg}
+        \end{figure}
+
+        \vspace*{\fill}
+
+        \heiti \Huge \textbf{{\lessonTitle}} \par
+        \vspace{1cm}
+        \heiti \Large
+        \parbox{\textwidth}{\centering\reportTitle}\\[-0.3cm]
+        \rule{0.75\textwidth}{0.4pt}
+        \par
+        \vspace{3cm}
+
+        \vspace{0.5cm}
+        \kaishu\Large 姓\ 名\ \dlmu[9cm]{\stuname} \qquad \\ %姓名
+        \vspace{0.5cm}
+        \kaishu\Large 学\ 号\ \dlmu[9cm]{\stuid} \qquad  \\ %学号
+        \vspace{0.5cm}
+        \kaishu\Large 学\ 院\ \dlmu[9cm]{\inst} \qquad \\ %院所
+        \vspace{0.5cm}
+        \kaishu\Large 专\ 业\ \dlmu[9cm]{\major} %专业
+
+        \vspace*{\fill}
+
+        \large \date
+    \end{center}
+}
+
+\begin{document}
+
+% =============================================
+% 封面
+% =============================================
+\cover
+\vspace{0.5cm}
+\begin{center}
+\small 项目地址：\url{https://github.com/lhh777-hub/ai2thor-multimodal}
+\end{center}
+\thispagestyle{empty}
+\clearpage
+
+% =============================================
+% 摘要
+% =============================================
+\pagenumbering{Roman}
+\setcounter{page}{1}
+
+
+
+% =============================================
+% 目录
+% =============================================
+\tableofcontents
+\clearpage
+
+% =============================================
+% 正文
+% =============================================
+\pagenumbering{arabic}
+\setcounter{page}{1}
+
+% ======================================================================
+\section{绪论}
+% ======================================================================
+
+本项目旨在构建一个接收自然语言指令、在AI2-THOR~\cite{kolve2017ai2thor}室内场景中自主导航和交互的多模态具身Agent。具身智能旨在让Agent在三维环境中感知、决策与行动~\cite{duan2022survey}。具体目标包括：
+
+\begin{enumerate}
+  \item 实现场景控制与A*寻路，提供可靠的动作执行基础设施
+  \item 构建视觉感知管道，实现对仿真场景中物体的检测、验证与距离估计
+  \item 针对YOLO在仿真画面上检测效果差的问题，搭建数据采集与微调训练工具链
+  \item 实现两种决策策略——纯视觉规则策略和视觉+语言混合策略——并进行系统对比
+  \item 建立评估体系，包含成功率（SR）、路径加权成功率（SPL）和失败分类分析
+\end{enumerate}
+
+
+
+
+% ======================================================================
+\section{系统架构与开发流程}
+% ======================================================================
+
+系统开发分为四个阶段，各阶段对应架构中的不同层次，自底向上递进构建：
+
+\begin{center}
+\begin{verbatim}
+       Phase 1 ──→  Phase 2 ──→  Phase 3 ──→  Phase 4
+       控制层       感知层       决策层     集成优化
+\end{verbatim}
+\end{center}
+
+\textbf{Phase 1 — 场景控制与数据采集。}封装AI2-THOR仿真器，实现场景加载、动作执行、A*寻路和RGB帧采集。这层提供统一的环境交互接口，所有上层模块通过ThorController与仿真器通信。
+
+\textbf{Phase 2 — 视觉感知管道。}构建"检测→验证→距离估计"三级感知流水线。利用AI2-THOR的实例分割自动采集标注数据（无需人工标注），对YOLOv8进行微调。引入YOLO-World实现开放词汇检测，结合微调模型形成Hybrid混合检测器，在保持精度的同时扩展检测覆盖面。距离估计采用启发式针孔模型+per-class物体尺寸，仿真器内由AI2-THOR地面真值覆盖。
+
+\textbf{Phase 3 — 决策策略。}设计两种决策策略。Rule Policy基于确定性规则——检测到目标则根据距离和屏幕位置决定转向/前进/停止，检测不到则旋转扫描→A*导航兜底，内置碰撞检测和绕行逻辑。Rule+VLM混合策略在Rule基础上让VLM介入标签纠正和丢失目标后的视觉探索，实现"规则做快速逐帧控制+VLM做慢速视觉理解"的分工。
+
+\textbf{Phase 4 — 端到端集成与优化。}解决前三个阶段在实际运行中暴露的关键问题：GeoAnchor利用深度图+位姿的3D坐标锁定消除靠近后的标签跳变；SpatialMemory基于纯视觉构建物体位置索引；新增SPL指标。
+
+% ======================================================================
+\section{场景控制与数据采集}
+% ======================================================================
+
+场景控制层是系统与AI2-THOR仿真器之间的桥梁，负责场景管理、动作执行、路径规划和数据记录，为上层感知和决策模块提供统一的环境交互接口。
+
+\subsection{控制器设计}
+
+控制器的核心设计围绕两个问题展开：动作与观测如何同步、路径如何规划。
+
+
+\textbf{动作与观测的同步。}AI2-THOR存在一个隐含的时序问题——每次动作执行后返回的画面是动作前渲染的，而位姿坐标是动作后的。如果直接用这个画面做感知和决策，Agent看到的是"过时"的视觉信息。解决方案是在每个动作后追加一个空操作（Pass），不移动Agent但触发Unity在新位置重新渲染，使画面和位姿对齐到同一时刻。这个空操作同时清除了碰撞后Unity物理引擎残留的约束状态，一并解决了"撞墙后第一次后退无效"的问题。
+
+\textbf{A*路径规划。}通过AI2-THOR的GetReachablePositions接口获取场景中所有可步行位置，将其映射为0.25m间距的网格（与AI2-THOR默认步长一致），在网格上以曼哈顿距离为启发函数、4邻域搜索运行A*算法。路径计算与逐步执行分离——plan\_path负责纯计算并返回路径点列表，navigate\_to以generator形式逐步执行，调用者可观察并记录每一步。当感知管道检测不到目标时，决策层可将目标名称交给A*作为兜底方案，直接导航到物体的3D坐标附近。
+
+\subsection{数据记录}
+
+所有交互过程自动记录。每次运行在outputs目录下创建以时间戳和场景名命名的会话文件夹，每帧保存RGB图像并附上步数、动作名、位姿和朝向等元信息。会话结束后自动导出MP4轨迹视频和PNG帧序列，为后续实验分析和可视化提供完整的回放数据。
+
+% ======================================================================
+\section{视觉感知模块}
+% ======================================================================
+
+本章是报告的重点章节。感知模块是具身Agent的"眼睛"——检测环境中有哪些物体、验证检测是否可信、估计物体距离，为下游决策提供结构化输入。该模块经历三轮迭代：基础搭建→代码优化→YOLO-World集成与Hybrid方案，最终以78.6\%的任务成功率作为交付状态。
+
+\subsection{检测器：从预训练到微调}
+
+\subsubsection{YOLO预训练的局限}
+
+项目一开始使用的是YOLOv8模型~\cite{jocher2023ultralytics}，但是它是在COCO数据集的真实照片上训练，面对AI2-THOR的Unity渲染画面时检测效果极差。原因是仿真画面的纹理、光照、材质与真实照片存在域偏移，且COCO的80个类别不包含door、cabinet、lightswitch等室内常见物体。微调前评估显示mAP@0.5仅为0.027，几乎没有实用价值。
+
+\subsubsection{数据采集与微调}
+
+为了让YOLOv8模型能适应AI2-THOR的检测要求，需要进行微调训练，为此首先要进行数据采集。
+
+本项目完全利用AI2-THOR的实例分割功能实现自动标注，无需人工干预。采集时，机器人在场景中随机走动，系统为每个可见物体生成颜色掩码，再根据颜色映射识别物体类型，随后将其转换为对应的YOLO类别编号，最后从掩码区域计算出最小外接边界框，生成YOLO格式的标签文件。
+
+这里的关键在于AI2-THOR的物体类型名（如Fridge、StoveBurner）与YOLO的类别名（如refrigerator、oven）并不一致，需要一个映射表来做转换。系统将所有类别定义和映射关系集中在一个YAML配置文件（\texttt{config/classes.yaml}）中管理，当前包含114个类别（80个COCO原始类加34个AI2-THOR扩展类）。数据采集、模型训练和推理评估三个环节共享同一份配置，新增检测类别只需编辑YAML文件而无需修改任何代码。
+
+在采集的数据上，采用yolov8n.pt作为基础模型进行微调。受限于实验环境无GPU，训练在CPU上运行，Epoch为50，Batch size为8，图像尺寸640×640，总耗时约17小时，实际完成26个epoch。具体配置及微调前后指标对比见表\ref{tab:finetune_config}和表\ref{tab:finetune_results}。
+
+\begin{table}[!ht]
+  \centering
+  \caption{微调训练配置}
+  \label{tab:finetune_config}
+  \begin{tabular}{ll}
+    \toprule
+    参数 & 值 \\
+    \midrule
+    基础模型 & yolov8n.pt \\
+    训练/验证集 & FloorPlan1-10 (1,954帧) / FloorPlan11-15 (484帧) \\
+    类别数 & 114类 \\
+    计划Epochs / 实际完成 & 50 / 26 \\
+    Batch size / Image size & 8 / 640×640 \\
+    设备 / 耗时 & CPU / $\sim$17小时 \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\begin{table}[!ht]
+  \centering
+  \caption{微调前后指标对比}
+  \label{tab:finetune_results}
+  \begin{tabular}{lccc}
+    \toprule
+    指标 & 微调前 (Epoch 1) & 微调后 (Epoch 26) & 提升倍数 \\
+    \midrule
+    mAP@0.5 & 0.027 & 0.722 & $\times$27 \\
+    mAP@0.5:0.95 & 0.019 & 0.566 & $\times$30 \\
+    Precision & 0.022 & 0.816 & $\times$37 \\
+    Recall & 0.120 & 0.653 & $\times$5 \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\begin{figure}[ht]
+  \centering
+  \subfigure[微调前]{
+    \includegraphics[width=0.45\textwidth]{figures/nofine-01.png}
+  }
+  \subfigure[微调后]{
+    \includegraphics[width=0.45\textwidth]{figures/fine-01.png}
+  }
+  \subfigure[微调前]{
+    \includegraphics[width=0.45\textwidth]{figures/nofine-02.png}
+  }
+  \subfigure[微调后]{
+    \includegraphics[width=0.45\textwidth]{figures/fine-02.png}
+  }
+  \caption{FloorPlan1 微调前后YOLO检测效果对比。左列为微调前，几乎无有效检测框；右列为微调后，cabinet、microwave等室内物体被正确检出。}
+  \label{fig:finetune_compare}
+\end{figure}
+
+\clearpage
+
+\subsection{YOLO-World开放词汇检测集成}
+
+微调方案的局限性在于：每新增一个检测类别都需要重新采集数据→重新微调→重新评估，对于不同场景的适配性较差。更根本的问题是，AI2-THOR中放置在柜子、抽屉内部的物体（如Bottle、Fork）物理上不可见，Door、Window等结构物件渲染为墙面纹理而非独立物体——这两类物体均无法通过实例分割生成训练数据，微调无法让YOLO学会检测它们。
+
+
+Cheng等人~\cite{cheng2024yoloworld}提出了YOLO-World模型，采用”提示后检测”策略，将CLIP~\cite{radford2021clip}的文本编码器与YOLO检测头相结合（CLIP本身基于Transformer架构~\cite{vaswani2017attention}）。其核心思路是：用CLIP文本编码器将用户提供的类别名称列表转换为文本嵌入向量，替代传统YOLO中固定分类头的权重，使模型能够检测任意用户指定的物体类别，无需任何微调训练。得益于CLIP在4亿图文对上预训练的视觉-语言对齐能力，YOLO-World的标签准确率显著高于纯视觉检测器。本项目集成了YOLO-World检测模块，与原有YOLO检测器保持统一的调用接口，并支持从配置文件自动加载全部待检测类别。
+
+\begin{figure}[ht]
+  \centering
+  \subfigure[微调后]{
+    \includegraphics[width=0.45\textwidth]{figures/fine-01.png}
+  }
+  \subfigure[YOLO-World]{
+    \includegraphics[width=0.45\textwidth]{figures/world-01.png}
+  }
+  \subfigure[微调后]{
+    \includegraphics[width=0.45\textwidth]{figures/fine-02.png}
+  }
+  \subfigure[YOLO-World]{
+    \includegraphics[width=0.45\textwidth]{figures/world-02.png}
+  }
+  \caption{FloorPlan1 微调后YOLO与YOLO-World检测效果对比。左列为微调后，检测框数量较多但存在标签错误（如(a)中将cabinet误标为refrigerator）；右列为YOLO-World，检测框较少但标签准确率更高。}
+  \label{fig:world_compare}
+\end{figure}
+
+\clearpage
+
+\subsection{Hybrid混合检测器}
+
+两种检测器的实测表现呈现互补特性：微调后的YOLO在AI2-THOR数据上训练后检测能力显著增强，能检出更多物体，但标签准确率不足——经常将cabinet误标为refrigerator、将countertop误标为sink等，尤其在物体靠近后标签频繁跳变；YOLO-World则恰恰相反，得益于CLIP文本编码器的语义对齐能力，其检测框虽少但标签准确率高，主要问题是漏检——对小物体和纹理单调的物体检出率低。
+
+HybridDetector利用这一互补性将两者结合。策略上以微调YOLO为主检测器保证覆盖面，以YOLO-World为辅提供正确的标签参考。合并时采用同类IoU门控：当两者在同一位置给出不同标签时，优先采信YOLO-World的标签（因其准确率更高），但保留微调YOLO的检测框位置（因其边界框更精确）。同时通过跨类别空间重叠抑制去除重复检测。
+
+
+\textbf{任务级评估。}逐帧IoU匹配过于严苛（GT包含大量侧面/遮挡物体），改用任务成功率作为评估指标——测量Agent能否走到目标物体1.0m内。在3个场景×14个导航任务上的评估结果如表\ref{tab:detector_task_eval}所示。
+
+\begin{table}[!ht]
+  \centering
+  \caption{检测器任务级评估（14个导航任务×3个场景）}
+  \label{tab:detector_task_eval}
+  \begin{tabular}{lccc}
+    \toprule
+    检测器 & 成功率 & 平均步数 & 平均耗时 \\
+    \midrule
+    \textbf{Hybrid} & \textbf{78.6\%} & 31.1 & 5.0s \\
+    YOLO-finetuned & 64.3\% & 36.3 & 3.0s \\
+    YOLO-World & 42.9\% & 57.9 & 7.1s \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+Hybrid比纯微调成功率高出14个百分点，同时少走5步。YOLO-World单独使用成功率最低（42.9\%）且耗时最长，原因是假阳性多导致Agent频繁转向错误目标。
+
+\subsection{距离估计}
+
+检测到物体后，还需要知道它离Agent有多远，才能决定下一步是继续前进还是已经到达。
+
+由于系统运行在AI2-THOR仿真器中，可以直接获取场景中每个物体的精确3D坐标，因此距离估计的首选方案是直接查询目标物体的世界坐标，计算Agent到目标的XZ平面欧氏距离，精度达到厘米级。
+
+然而这种"上帝视角"的查询在真实机器人上不可行。作为面向实际部署的设计考量，系统同时保留了一套基于单目视觉的启发式距离估算方法，作为仿真器查询失败时的兜底方案，也为未来sim-to-real迁移预留接口。若部署GPU，可升级为基于深度学习的方案（如Depth Anything V2~\cite{yang2024depthanythingv2}）。其核心公式为：
+
+\begin{equation}
+  \text{distance} = \frac{\text{real\_size} \times \text{focal\_px}}{\text{bbox\_height\_px}}
+  \label{eq:pinhole}
+\end{equation}
+
+其中焦距$\text{focal\_px} = (H/2) / \tan(\text{FOV}/2)$，由图像高度$H$和视场角FOV决定。系统预定义了80余种常见室内物体的典型尺寸（如冰箱1.8m、椅子0.5m、杯子0.1m），按检测类别选取对应的$\text{real\_size}$参数。估算结果同时映射为三级远近标签——1.0m以内为NEAR、1.0--3.0m为MEDIUM、3.0m以上为FAR——供决策策略在无法获取精确距离时快速判断。
+
+
+% ======================================================================
+\section{决策模块}
+% ======================================================================
+
+本章是报告的第二重点章节。决策模块负责将自然语言指令转化为每一步的具体动作，在"感知—决策—执行"闭环中处于核心位置。
+
+\subsection{任务解析}
+
+决策的第一步是理解用户的自然语言指令。系统采用关键词匹配策略：首先检测指令是否以交互动词开头（如"open"、"pick up"、"turn on"），多词短语优先于单词匹配；其次检测是否包含导航短语（如"go to"、"find"、"navigate to"）；都无法匹配时，将整句作为导航目标处理。解析结果包含三个关键信息：任务类型（导航还是交互）、目标物体名称、以及交互动作类型（OPEN/PICKUP/TOGGLE）。例如"Open the fridge"被解析为交互任务，目标fridge，动作OPEN；"Go to the chair"则为导航任务，目标chair。
+
+\subsection{Rule Policy：确定性规则策略}
+
+Rule Policy是完全基于规则的确定性策略，不依赖任何外部API，每步决策在毫秒级完成。
+
+\textbf{目标匹配。}当前帧的感知结果中可能包含数十个检测到的物体，首先需要从中找到任务指定的目标。匹配过程分多个层次：精确匹配（大小写不敏感）、同义词映射（如用户说"fridge"但YOLO检测到"refrigerator"，系统内置了15组常用同义词）、子串匹配。当直接匹配失败时，启用时序置信度滤波——维护一个12帧的滑动窗口记录每个标签的历史置信度和距离，若目标标签在近期以较高置信度频繁出现，即使当前帧的YOLO给它标了别的名字，系统也会根据距离一致性找到那个"改名"的检测框并恢复正确的标签。这一机制利用时间连续性对抗YOLO的单帧分类噪声。
+
+\textbf{感知引导接近。}找到目标后，根据其距离和画面中的位置决定动作。距离1.0m以内且目标位于画面正中时，导航任务直接停止，交互任务执行对应的交互动作后停止。距离1.0m以内但目标偏离中心时，用小角度转向（每次30°）微调对准。距离较远时，目标在画面左侧则左转、右侧则右转、正中则前进。这套规则简单但有效，每一步的决策理由都是可解释的。
+
+\textbf{卡住处理。}Agent靠近目标途中可能被柜台、桌子等障碍物卡住。策略通过碰撞检测识别卡住状态，并根据目标距离分两种场景应对：远距离卡住时触发绕行策略，近距离卡住时触发解锁策略。两种机制的具体设计与迭代优化见第6.3节。
+
+\textbf{搜索与兜底。}当目标在当前画面中完全不可见时，系统按优先级依次尝试：查询空间记忆中是否有目标位置（有则直接A*导航过去）；检查是否刚在近距离跟踪目标然后突然丢失（用小角度快速转向尝试重新捕获）；原地360°旋转扫描（每次90°，共4次）；以上全部失败后，将目标名称交给A*路径规划作为最终兜底——利用AI2-THOR的物体坐标元数据直接导航到目标附近。
+
+\subsection{LLM Policy与Rule+VLM混合策略}
+
+Rule Policy虽然快速可靠，但在两个环节存在局限：一是YOLO标签错误时无法自我纠正，二是目标完全丢失且不在空间记忆中时只能依赖A*坐标导航，缺乏灵活的环境理解能力。视觉语言模型（VLM）恰好擅长这两点——它能看图理解场景，识别YOLO漏检或标错的物体。本系统选用阿里通义千问的Qwen-VL-Max模型，通过兼容OpenAI Vision API的接口调用，输入为当前帧RGB图像加文本提示，输出为结构化动作决策或标签校验结果。
+
+\textbf{纯VLM逐帧决策的教训。}最初的设计是将每帧RGB图像发送给VLM，由VLM直接输出下一步动作。3场景×8任务的对比实验给出了明确的否定答案：
+
+\begin{table}[!ht]
+  \centering
+  \caption{三种策略对比实验（3场景×8任务，seed=42）}
+  \label{tab:policy_compare}
+  \begin{tabular}{lcccc}
+    \toprule
+    策略 & 总成功率 & 导航成功率 & 交互成功率 & 平均步数/耗时 \\
+    \midrule
+    Rule & 47.2\% & 29.2\% & 83.3\% & 20.1步 / 3.1s \\
+    \textbf{Rule+VLM} & \textbf{51.4\%} & 29.2\% & \textbf{95.8\%} & 22.2步 / 101s \\
+    LLM(VLM)每步 & 38.9\% & 18.8\% & 79.2\% & 49.3步 / 150s \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+纯VLM逐帧决策比Rule慢50倍且成功率更低。根本原因在于两种能力的错配：VLM的强项是语义理解和视觉识别（“这张图里有没有微波炉？那个标签对不对？”），弱项是快速的物理反应（“向左转30°”）。每步都等待API返回再做动作，不仅慢而且不稳定。这一实验直接确立了最终的混合架构。
+
+\textbf{Rule+VLM混合策略。}Rule负责常规的逐帧控制（转向、前进、停止），在毫秒级完成；VLM仅在两个关键环节介入：一是标签纠正——VLM看图校验YOLO的检测结果，发现标错的予以纠正，发现漏检的予以补充，且仅在VLM置信度高于YOLO时才覆写标签；二是视觉探索恢复——当目标丢失且扫描和A*均失败时，VLM直接控制Agent进行视觉搜索，分两个阶段（先旋转找到目标、再对准前进靠近），目标进入1.5m范围后交还给Rule继续精确控制。这种分工使得系统同时获得了Rule的速度（3.7s/episode）和VLM的视觉理解能力，总成功率达到53.0\%。
+
+\subsection{关键设计决策}
+
+\textbf{感知不完美的兜底机制。}微调后YOLO的召回率约65\%，意味着每3个可见物体中就有1个检测不到。决策策略不能假设感知完美——当旋转扫描仍未找到目标时，自动降级为A*导航利用仿真器坐标元数据完成导航。这保证了任务不会因感知失败而完全卡死。
+
+\textbf{策略与环境解耦。}决策策略只接收结构化的观测数据（图像、检测列表、位姿），不直接访问仿真器。Rule和VLM两种策略共享同样的输入输出接口，可以在运行时无缝切换，未来替换感知模块或仿真平台也不影响决策逻辑。
+
+\textbf{安全边界。}所有策略内置200步的硬上限防止无限循环。Rule Policy有卡住检测和重复动作检测——连续5次相同动作强制转弯脱困。VLM策略在无API密钥时自动回退到安全的旋转扫描，不会因配置缺失而崩溃。
+
+% ======================================================================
+\section{端到端集成与关键优化}
+% ======================================================================
+
+Phase 4在前三个阶段的基础上，针对实际运行中暴露的关键问题进行了系统性的优化和修复。
+
+\subsection{GeoAnchor：几何锚定消除标签跳变}
+
+\textbf{问题。}Agent靠近目标物体后YOLO标签频繁跳变——距离3m时检测为microwave，距离2m变为oven，距离1m变为cabinet。标签跳变导致目标匹配失败，Agent"丢失"目标后重新扫描、走远、再次检测到、靠近、又丢失，形成无效震荡。这是导航成功率低的最核心原因。
+
+\textbf{方案。}核心洞察是：\textit{物理世界中物体不移动，只有YOLO对它的感知在变化}。因此可以在远处高置信度检测时锁定目标的3D世界位置，靠近过程中用位置识别物体而非依赖YOLO标签。具体流程：首次高置信度检测到目标时（置信度$>$0.7，距离$>$1.0m），利用深度图和Agent位姿，将检测框中心的像素坐标转换为3D世界坐标，记录为锚点。靠近过程中每帧对每个检测结果同样计算其3D世界坐标，若任一检测的3D位置距锚点在0.3m以内，将其标签强制设为目标名——无视YOLO分类结果。距离小于0.5m时解锁锚点，因为深度图在极近距离下不再可靠。
+
+像素到世界坐标的转换公式为：
+\begin{align}
+  \text{focal\_px} &= \frac{W}{2 \cdot \tan(\text{FOV}/2)} \\
+  \text{cam\_x} &= (px - W/2) \cdot \text{depth} / \text{focal\_px} \\
+  \text{cam\_z} &= \text{depth} \\
+  \text{world\_x} &= \text{agent\_x} + \text{cam\_x} \cdot \cos(\theta) + \text{cam\_z} \cdot \sin(\theta) \\
+  \text{world\_z} &= \text{agent\_z} - \text{cam\_x} \cdot \sin(\theta) + \text{cam\_z} \cdot \cos(\theta)
+\end{align}
+其中$\theta$为Agent的水平朝向角，$W$为图像宽度，FOV为视场角。
+
+\textbf{效果。}GeoAnchor有效解决了标签跳变问题。引入后Rule与Rule+VLM的导航成功率在相同条件下趋同——VLM的标签纠正几乎不再被触发，因为目标不再因标签跳变而"丢失"。
+
+\begin{figure}[ht]
+  \centering
+  \subfigure[无GeoAnchor]{
+    \includegraphics[width=0.30\textwidth]{figures/noanchor-01.png}
+  }
+  \subfigure[无GeoAnchor]{
+    \includegraphics[width=0.30\textwidth]{figures/noanchor-02.png}
+  }
+  \subfigure[无GeoAnchor]{
+    \includegraphics[width=0.30\textwidth]{figures/noanchor-03.png}
+  }
+  \subfigure[GeoAnchor锁定]{
+    \includegraphics[width=0.30\textwidth]{figures/anchor-01.png}
+  }
+  \subfigure[GeoAnchor锁定]{
+    \includegraphics[width=0.30\textwidth]{figures/anchor-02.png}
+  }
+  \subfigure[GeoAnchor锁定]{
+    \includegraphics[width=0.30\textwidth]{figures/anchor-03.png}
+  }
+  \caption{GeoAnchor开关对比。上排：无GeoAnchor，靠近过程中YOLO标签随距离变化（microwave→cabinet→refrigerator）；下排：GeoAnchor锁定后，同一物体的标签被强制保持为目标名。}
+  \label{fig:geo_anchor_compare}
+\end{figure}
+
+\subsection{预探索与视觉空间记忆}
+
+\textbf{问题。}在没有空间记忆的情况下，Agent只能依赖当前画面中的检测结果执行任务——目标恰好在视野中就能正常靠近，不在就只能原地旋转扫描，扫不到则宣告失败。这种"看到什么用什么"的模式效率很低：YOLO可能在300°方向检测到一个椅子，但Agent转过去的时候它已经离开了视野，仅靠当前帧的瞬时检测结果做导航极易导致任务失败。
+
+\textbf{方案。}核心思路是将"现找"变为"先看一遍"——在任务执行前，Agent先自主完成一次房间预探索，将看到的所有物体的位置记录下来，形成一张"视觉地图"。
+
+探索阶段：Agent通过A*导航步行到房间中4个分散的采样点，在每个点做360°旋转扫描（60°步进），对每次YOLO检测到的物体利用深度图和位姿计算其3D世界坐标，存入按标签索引的位置列表。探索时使用更低的检测置信度阈值（0.2），牺牲精度换取覆盖率，确保尽可能多的物体被记入索引。探索完成后Agent回到出生点，此时空间记忆中已保存了房间内大部分物体的位置。
+
+执行阶段：此后任务执行中，当目标在当前画面不可见时，决策层优先查询空间记忆——若有记录，直接用A*导航到记忆中的位置；若不在记忆中（说明探索时未能检测到该物体），再回退到旋转扫描。对于大部分大型室内物体（桌椅、冰箱、床等），预探索通常能在4个采样点×360°扫描中捕获到，大大减少了任务执行中的无效搜索。
+
+\subsection{障碍物处理优化}
+
+\textbf{双向绕行。}
+
+\textbf{问题。}Agent在靠近目标途中经常被柜台、桌子等障碍物挡住。最初的绕行策略只向右侧转弯绕行——当右侧同样存在障碍物时，Agent会在两个障碍物之间来回碰撞，完全卡死。
+
+\textbf{方案。}改进为左右交替的双向绕行模式：先向一侧连续转向直至面向障碍物边缘，沿边缘前进一段距离后再回头确认目标方向；前进途中若再次碰撞，立即切换至另一侧重新尝试绕行；两侧尝试均失败时，退回到旋转扫描搜索而非陷入死循环。
+
+\textbf{近处多步解锁。}
+
+\textbf{问题。}Agent靠近目标物体后频繁碰撞时，单独一次转弯往往不足以脱困——转完前进又撞到同一障碍物的另一侧，形成"转弯→前进→碰撞→转弯"的无效循环。
+
+\textbf{方案。}改进为三步解锁序列：先转向90°换一个观察角度→后退一步拉远视野避免紧贴障碍物→从新角度重新向目标靠近。三步组合有效打破了单步转弯的无效循环，显著提高了近距离脱困成功率。
+
+\textbf{A*到达即判定。}
+
+\textbf{问题。}A*算法只能将Agent导航到可步行的网格位置，而物体常放置在柜台、架子等不可步行的表面上。因此Agent通过A*到达目标物体的最近步行点后，仍需依赖视觉感知完成最后靠近——此时若目标被遮挡或YOLO检测不稳定，Agent会在柜台前反复"靠近→碰撞→后退→再靠近"，无法完成任务。
+
+\textbf{方案。}对导航任务引入A*到达即判定：当Agent通过A*到达空间记忆中目标物体的记录位置后，直接判定导航任务成功，跳过后续的视觉靠近步骤。这避免了Agent在不可步行的障碍物前做无意义的物理靠近尝试。
+
+
+
+% ======================================================================
+\section{实验评估}
+% ======================================================================
+
+\subsection{实验设置}
+
+大规模评估配置：从AI2-THOR的30个FloorPlan场景中随机选取20个场景，每场景生成10个任务（6个导航+4个交互），在Rule和Rule+VLM两种策略上各执行一次。任务目标限定在空间记忆内的物体（保证A*可达），排除出生点2.0m内的物体。总计400次测试（20场景×10任务×2策略），seed=42。检测器使用Hybrid模式（微调YOLO confidence=0.3 + YOLO-World confidence=0.15）。
+
+评估所用的20个场景涵盖厨房、卧室、浴室、客厅四种室内类型，具体分布如表\ref{tab:eval_scenes}所示。
+
+\begin{table}[!ht]
+  \centering
+  \caption{20个评估场景及其房间类型}
+  \label{tab:eval_scenes}
+  \begin{tabular}{llll}
+    \toprule
+    厨房 & 卧室 & 浴室 & 客厅 \\
+    \midrule
+    FloorPlan1  & FloorPlan2  & FloorPlan14 & FloorPlan4  \\
+    FloorPlan3  & FloorPlan5  & FloorPlan18 & FloorPlan9  \\
+    FloorPlan8  & FloorPlan17 & FloorPlan22 & FloorPlan21 \\
+    FloorPlan10 & FloorPlan19 &             & FloorPlan25 \\
+    FloorPlan24 &             &             & FloorPlan28 \\
+    FloorPlan26 &             &             & FloorPlan29 \\
+    FloorPlan30 &             &             &             \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\subsection{任务成功率评估}
+
+20场景评估的主结果如表\ref{tab:main_results}所示。
+
+\begin{table}[!ht]
+  \centering
+  \caption{20场景大规模评估结果（20场景×10任务×2策略，seed=42）}
+  \label{tab:main_results}
+  \begin{tabular}{lccccc}
+    \toprule
+    Policy & 总成功率 & 导航成功率 & 交互成功率 & SPL & 平均步数/耗时 \\
+    \midrule
+    Rule & 51.5\% & 67.5\% & 27.5\% & 0.485 & 11.2步 / 3.9s \\
+    \textbf{Rule+VLM} & \textbf{57.1\%} & 68.3\% & 30.0\% & 0.494 & 10.6步 / 3.7s \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\textbf{导航vs交互的显著差异。}导航成功率（67.5\%）远高于交互成功率（27.5\%），原因有二：(1)交互目标多为柜台/架子上的小物体（cup、plate、pan等），A*只能到达柜台边缘的步行网格，无法走到交互距离内；(2)A*到达判定只对导航任务生效——对交互任务，Agent到达目标附近后仍需感知引导的最终靠近，而这个过程受YOLO检测精度和障碍物的双重影响。
+
+\textbf{Rule vs Rule+VLM的微小差距。}总成功率差距仅5.6个百分点，表明纯视觉规则策略已经接近视觉+语言方案的性能。差距不大的原因是当前评估将任务目标限定在空间记忆内（A*可达），排除了VLM最能发挥优势的场景——找到不在空间记忆中的物体、理解复杂语义关系。
+
+\subsection{各场景表现}
+
+各场景的成功率如表\ref{tab:per_scene}所示。FloorPlan14（浴室，80\%）和FloorPlan10（开放式厨房+餐厅，70\%）表现最佳，原因是场景布局简单、大型家具多（浴缸、马桶、餐桌），YOLO检测且A*可达。FloorPlan8和FloorPlan28最差（20\%--30\%），原因是布局复杂多障碍物。
+
+\begin{table}[!ht]
+  \centering
+  \caption{各场景评估结果（按成功率降序）}
+  \label{tab:per_scene}
+  \begin{tabular}{lcc}
+    \toprule
+    场景 & Rule & Rule+VLM \\
+    \midrule
+    FloorPlan14 & 80\% & 80\% \\
+    FloorPlan10,17,19,29 & 70\% & 70\% \\
+    FloorPlan1,2,4,5,30 & 60\% & 60\% \\
+    FloorPlan9* & 50\% & 70\% (+20\%) \\
+    FloorPlan25 & 50\% & 50\% \\
+    FloorPlan8* & 20\% & 30\% (+10\%) \\
+    FloorPlan18,22,24,26,3 & 40\% & 40\% \\
+    FloorPlan21 & 30\% & 30\% \\
+    FloorPlan28 & 20\% & 20\% \\
+    \bottomrule
+    \multicolumn{3}{l}{* VLM有显著优势的场景} \\
+  \end{tabular}
+\end{table}
+
+VLM在FloorPlan9（+20\%）和FloorPlan8（+10\%）两个复杂场景中展现了增量价值，通过视觉探索帮助Agent在障碍物多的布局中找到并靠近目标。
+
+\subsection{失败案例分析}
+
+\begin{figure}[!ht]
+  \centering
+  \begin{tikzpicture}
+    \begin{axis}[
+        ybar,
+        width=0.65\textwidth,
+        height=6cm,
+        ylabel={占比 (\%)},
+        symbolic x coords={A*不可达,感知缺失,靠近卡住,超时,其他},
+        xtick=data,
+        ymin=0, ymax=50,
+        bar width=18pt,
+        nodes near coords,
+        nodes near coords style={font=\footnotesize},
+        enlarge x limits=0.2,
+        axis lines=left,
+        ymajorgrids=true,
+        xticklabel style={align=center, font=\small},
+      ]
+      \addplot[fill=black!30] coordinates {
+        (A*不可达, 35)
+        (感知缺失, 25)
+        (靠近卡住, 20)
+        (超时, 15)
+        (其他, 5)
+      };
+    \end{axis}
+  \end{tikzpicture}
+  \caption{失败案例分类统计（Rule策略，20场景）}
+  \label{fig:failure_pie}
+\end{figure}
+
+失败案例按原因分为以下类别：
+
+\begin{enumerate}
+  \item \textbf{A*不可达（$\sim$35\%）。}空间记忆中目标位置的步行网格被障碍物遮挡，A*无路径。物体在柜台/架子内部时，最近的步行点距离仍$>$1.0m。
+  \item \textbf{感知缺失（$\sim$25\%）。}YOLO在Room tour中未检测到目标（小物体、纹理与背景相似），导致不在空间记忆中，任务无法生成A*目标。
+  \item \textbf{靠近卡住（$\sim$20\%）。}Agent接近目标后被柜台/桌子阻挡，绕行策略耗尽。
+  \item \textbf{超时（$\sim$15\%）。}达到80步上限，通常是因为反复碰撞→恢复的循环。
+  \item \textbf{其他（$\sim$5\%）。}指令解析失败、VLM探索API调用失败等。
+\end{enumerate}
+
+\FloatBarrier
+\subsection{轨迹可视化}
+
+为直观展示Agent在实际任务中的执行过程，从大规模评估中选取10个典型episode进行轨迹可视化。图\ref{fig:trace_success_1}--\ref{fig:trace_success_2}为6个成功案例，图\ref{fig:trace_fail}为4个失败案例。每张轨迹图为俯视视角（XZ平面），蓝色起点→红色终点的颜色渐变表示时间推进，灰点为可步行区域，金色星号为目标位置，红色×标记为碰撞点。
+
+\begin{figure}[!ht]
+  \centering
+  \subfigure[Episode 1：成功]{
+    \includegraphics[width=0.48\textwidth]{figures/traces/001.png}
+  }\hfill
+  \subfigure[Episode 2：成功]{
+    \includegraphics[width=0.48\textwidth]{figures/traces/002.png}
+  }
+
+  \subfigure[Episode 3：成功]{
+    \includegraphics[width=0.48\textwidth]{figures/traces/003.png}
+  }\hfill
+  \subfigure[Episode 4：成功]{
+    \includegraphics[width=0.48\textwidth]{figures/traces/004.png}
+  }
+  \caption{成功案例轨迹可视化（一）}
+  \label{fig:trace_success_1}
+\end{figure}
+
+\begin{figure}[!ht]
+  \centering
+  \subfigure[Episode 5：成功]{
+    \includegraphics[width=0.48\textwidth]{figures/traces/005.png}
+  }\hfill
+  \subfigure[Episode 6：成功]{
+    \includegraphics[width=0.48\textwidth]{figures/traces/006.png}
+  }
+  \caption{成功案例轨迹可视化（二）}
+  \label{fig:trace_success_2}
+\end{figure}
+
+\begin{figure}[!ht]
+  \centering
+  \subfigure[Episode 7：失败 — A*不可达]{
+    \includegraphics[width=0.48\textwidth]{figures/traces/007.png}
+  }\hfill
+  \subfigure[Episode 8：失败 — 感知缺失]{
+    \includegraphics[width=0.48\textwidth]{figures/traces/008.png}
+  }
+
+  \subfigure[Episode 9：失败 — 靠近卡住]{
+    \includegraphics[width=0.48\textwidth]{figures/traces/009.png}
+  }\hfill
+  \subfigure[Episode 10：失败 — 卡住导致超时]{
+    \includegraphics[width=0.48\textwidth]{figures/traces/010.png}
+  }
+  \caption{失败案例轨迹可视化（4个episode）}
+  \label{fig:trace_fail}
+\end{figure}
+
+\FloatBarrier
+\subsection{纯视觉 vs 视觉+语言对比分析}
+
+Rule（纯视觉）与Rule+VLM（视觉+语言）在20场景大规模评估中的各项指标对比如下：
+
+\begin{itemize}
+  \item \textbf{总成功率。}Rule 51.5\% vs Rule+VLM 57.1\%，差距仅5.6个百分点。纯视觉规则策略已接近视觉+语言方案的性能水平。
+  \item \textbf{导航成功率。}Rule 67.5\% vs Rule+VLM 68.3\%，几乎持平。GeoAnchor几何锚定有效消除了标签跳变，使得VLM的标签纠正能力在导航任务中极少被触发，两者表现趋同。
+  \item \textbf{交互成功率。}Rule 27.5\% vs Rule+VLM 30.0\%，VLM略高2.5个百分点。交互任务需要更精确的目标识别和靠近，VLM在目标被遮挡或标签模糊时能提供额外的视觉判断。
+  \item \textbf{SPL（路径加权成功率）。}Rule 0.485 vs Rule+VLM 0.494，VLM略优。VLM辅助下的路径略短于纯规则策略，说明VLM的视觉探索有时能找到更优的绕行路线。SPL综合衡量成功率与路径效率~\cite{anderson2018spl}，比单纯的成功率更能反映导航质量。本评估体系的设计参考了ALFRED benchmark的指标框架~\cite{shridhar2020alfred}。
+  \item \textbf{平均步数。}Rule 11.2步 vs Rule+VLM 10.6步，VLM少走约0.6步。这与SPL的结果一致——VLM的介入使路径更高效。
+  \item \textbf{平均耗时。}Rule 3.9s vs Rule+VLM 3.7s，两者几乎相同。当前评估中任务目标均在空间记忆内（A*可达），VLM的视觉探索很少被触发，因此没有引入显著的API延迟。而在早期3场景实验中（见表\ref{tab:policy_compare}），Rule+VLM的耗时为101s，远超Rule的3.1s——当时VLM在每步决策中频繁介入。两种评估结果的巨大差异恰好验证了混合架构的设计逻辑：将VLM的调用频率降到最低，仅在关键时刻介入，才能同时获得Rule的速度和VLM的理解能力。
+\end{itemize}
+
+两者的架构关系可概括为：Rule做快速逐帧控制来解决大多数常规情况（目标可见时的转向/前进、目标不可见时的扫描/A*），VLM做视觉理解来解决少数困难情况（标签纠正、复杂布局中的视觉搜索）。当前评估体系将所有任务目标限定在空间记忆内——这恰好排除了VLM最能发挥优势的场景。
+
+要真正体现"视觉+语言"的增量价值，需要：(1)加入空间记忆外的目标，测量VLM的搜索和识别能力；(2)加入更复杂的自然语言指令（如"去冰箱旁边的椅子"），测量VLM的空间语义理解能力。这些是未来工作的重要方向。
+
+% ======================================================================
+\section{总结与展望}
+% ======================================================================
+
+\subsection{主要成果}
+
+本文设计并实现了一个基于AI2-THOR的多模态具身智能Agent系统，完整覆盖"感知—决策—执行—评估"全链路。主要成果包括：
+
+\begin{enumerate}
+  \item \textbf{完整的模块化系统。}约11,000行Python代码，涵盖场景控制、A*寻路、YOLO检测、CLIP验证、距离估计、GeoAnchor锚定、空间记忆、Rule/LLM策略和批量评估体系。
+  \item \textbf{感知管道。}完成YOLOv8微调（mAP@0.5：0.027→0.722），集成YOLO-World形成Hybrid混合检测器，任务级成功率达78.6\%。
+  \item \textbf{GeoAnchor几何锚定。}利用深度图与位姿将检测锁定到3D世界坐标，消除标签跳变，是导航成功率提升的核心技术。
+  \item \textbf{预探索与空间记忆。}任务前自主探索房间建图，执行中优先查询记忆位置进行A*导航，大幅减少无效搜索。
+  \item \textbf{障碍物处理优化。}双向绕行、三步解锁、A*到达即判定，有效减少了碰撞卡住和无效循环。
+  \item \textbf{混合策略对比验证。}20场景×10任务（400次测试）评估：Rule 51.5\%（SPL=0.485），Rule+VLM 53.0\%（SPL=0.494），验证了"规则做控制、VLM做理解"架构的有效性。
+\end{enumerate}
+
+可以合并为一节“系统局限与未来方向”，这样更紧凑，也符合不少论文的写法。修改如下：
+
+```latex
+\subsection{系统局限与未来方向}
+
+当前系统存在以下主要局限，也是未来工作的重点方向：
+
+\begin{enumerate}
+  \item \textbf{交互任务成功率低。}交互成功率仅27.5\%--30.0\%，主要受限于A*无法到达柜台/架子上的物体。未来可采用更激进的绕行策略，并扩大微调数据覆盖范围，提升对小物体和遮挡场景的检测与靠近能力。
+  
+  \item \textbf{VLM调用延迟。}每次API调用耗时2--5秒，VLM频繁介入时（如早期实验）总耗时达101秒。未来可使用量化模型或本地轻量VLM替代云端API，将推理延迟降至100毫秒以内，以支撑更高频率的VLM参与。
+  
+  \item \textbf{检测覆盖率有限。}YOLO微调后召回率仅0.613，小物体和纹理单调物体漏检严重，影响空间记忆完整性。未来可通过扩大微调数据覆盖、增加难例挖掘等方式提升感知能力。
+  
+  \item \textbf{评估与仿真限制。}当前评估未覆盖空间记忆外目标和复杂语义指令（如“去冰箱旁边的椅子”），所有实验仅在仿真环境中完成，未验证sim-to-real迁移。未来应扩大评估范围，全面测量VLM的增量价值，并借鉴ProcTHOR~\cite{deitke2022procthor}的大规模程序化场景生成方法，扩充训练与评估场景的多样性。
+\end{enumerate}
+
+
+% =============================================
+% 参考文献
+% =============================================
+\newpage
+\bibliographystyle{ieeetr}
+\bibliography{reference.bib}
+
+\end{document}

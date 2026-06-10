@@ -22,15 +22,17 @@ import argparse
 import os
 import sys
 import numpy as np
+import cv2
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 from src.controller.thor import ThorController
-from src.perception.detector import YOLODetector
+from src.perception.detector import YOLODetector, create_detector
 from src.perception.depth import HeuristicDepth
 from src.perception.pipeline import PerceptionPipeline
 from src.recording.collector import FrameCollector
 from src.common.logger import setup_logger
+from src.common.utils import draw_annotations
 
 logger = setup_logger("perceive")
 
@@ -39,6 +41,8 @@ SHORTCUT: dict[str, str] = {
     "a": "TURN_LEFT", "d": "TURN_RIGHT",
     "q": "TURN_LEFT_SMALL", "e": "TURN_RIGHT_SMALL",
 }
+
+
 
 
 def _print_detections(detections) -> None:
@@ -61,6 +65,15 @@ def _print_detections(detections) -> None:
             line += f"   {d.clip_score:5.2f}"
         line += f"   {d.screen_position:<8s}  {d.distance_level:<8s}  {d.distance_meters:>6.2f}"
         print(line)
+
+
+def _save_annotated_frame(rgb: np.ndarray, detections, step: int, frames_dir: str) -> str | None:
+    """Save an annotated detection frame as PNG.  Returns path or None."""
+    os.makedirs(frames_dir, exist_ok=True)
+    annotated = draw_annotations(rgb, detections)
+    path = os.path.join(frames_dir, f"step_{step:04d}.png")
+    cv2.imwrite(path, cv2.cvtColor(annotated, cv2.COLOR_RGB2BGR))
+    return path
 
 
 def _check_classes(scene: str, classes_path: str | None = None) -> None:
@@ -118,9 +131,6 @@ def _verify_labels(scene: str, classes_path: str | None = None) -> None:
     Output goes to ``outputs/verify/`` — open the saved PNGs to check
     whether bounding boxes and class names look correct.
     """
-    import cv2
-
-    from src.controller.thor import ThorController
     from src.perception.class_config import load_config
 
     cfg = load_config(classes_path)
@@ -228,7 +238,6 @@ def _draw_bboxes_on_frame_manual(rgb: np.ndarray, seg, colour_to_id: dict,
 
     Returns ``(count, {object_type, ...})`` — the set is for coverage tracking.
     """
-    import cv2
     seen = set()
     drawn = 0
     obj_types: set[str] = set()
@@ -268,15 +277,30 @@ def _draw_bboxes_on_frame_manual(rgb: np.ndarray, seg, colour_to_id: dict,
 
 def run(scene: str = "FloorPlan1", width: int = 800, height: int = 600,
         model: str = "yolov8n.pt", confidence: float = 0.3, use_clip: bool = False,
-        use_prior: bool = True, clip_threshold: float = 0.0):
+        use_prior: bool = True, clip_threshold: float = 0.0,
+        clip_detect_targets: list[str] | None = None,
+        clip_detect_threshold: float = 0.28,
+        clip_detect_iou: float = 0.5,
+        yolo_world: bool = False,
+        yolo_world_classes: str | None = None):
 
     auto_detect = True
-    detector = YOLODetector(model_name=model, confidence=confidence)
+    if yolo_world:
+        extra = clip_detect_targets if clip_detect_targets else None
+        detector = create_detector(model_name=model, confidence=confidence,
+                                   classes_path=yolo_world_classes,
+                                   extra_classes=extra)
+        if clip_detect_targets and hasattr(detector, 'classes'):
+            logger.info("YOLO-World classes: %s", detector.classes)
+    else:
+        detector = YOLODetector(model_name=model, confidence=confidence)
     depth = HeuristicDepth()
 
-    # Optional modules
+    # Optional modules — YOLO-World handles open-vocabulary detection natively,
+    # so CLIP verification and CLIPDetector are both redundant.
     verifier = None
-    if use_clip:
+    clip_detector = None
+    if use_clip and not yolo_world:
         try:
             from src.perception.verifier import CLIPVerifier
             verifier = CLIPVerifier()
@@ -284,30 +308,53 @@ def run(scene: str = "FloorPlan1", width: int = 800, height: int = 600,
             print(f"  CLIP not available: {e}")
             use_clip = False
 
+        if clip_detect_targets and verifier is not None:
+            from src.perception.verifier import CLIPDetector
+            clip_detector = CLIPDetector(verifier=verifier)
+    elif use_clip and yolo_world:
+        print("  CLIP verification skipped — YOLO-World already uses CLIP internally "
+              "and open-vocabulary targets are handled via scene vocabulary.")
+
     prior = None
     if use_prior:
         from src.perception.prior import ScenePrior
         prior = ScenePrior(scene)
 
-    pipeline = PerceptionPipeline(detector, depth, verifier=verifier, prior=prior)
+    pipeline = PerceptionPipeline(detector, depth, verifier=verifier, prior=prior,
+                                  clip_detector=clip_detector)
     collector = FrameCollector(scene=scene)
+    frames_dir = os.path.join(collector.session_dir, "frames")
+    os.makedirs(frames_dir, exist_ok=True)
 
     with ThorController(width=width, height=height) as ctrl:
         ctrl.load_scene(scene)
         result = ctrl.get_current_view()
         collector.record(result)
 
+        # Narrow YOLO-World vocabulary to objects actually in this scene
+        if yolo_world and hasattr(detector, 'set_classes_from_scene'):
+            detector.set_classes_from_scene(ctrl, extra=clip_detect_targets)
+
         room = prior.room_type if prior else "unknown"
+        clip_targets_str = ",".join(clip_detect_targets) if clip_detect_targets else "none"
         print(f"\n  Session: {collector.session_dir}")
         print(f"  Scene: {scene} ({room})  |  Model: {model}  |  YOLO conf={confidence}")
         print(f"  CLIP: {'ON' if use_clip else 'OFF'}  "
+              f"|  CLIP-detect: {clip_targets_str}  "
               f"|  Prior: {'ON' if use_prior else 'OFF'}  "
               f"|  Auto: {'ON' if auto_detect else 'OFF'}")
         print(f"  Commands: wasd=move  detect=perceive  clip/prior=toggle  quit=exit\n")
 
         if auto_detect:
-            dets = pipeline.process(result.sensor_data.rgb, controller=ctrl)
+            dets = pipeline.process(result.sensor_data.rgb, controller=ctrl,
+                                    clip_targets=clip_detect_targets,
+                                    clip_detect_threshold=clip_detect_threshold,
+                                    clip_detect_iou=clip_detect_iou)
             _print_detections(dets)
+            summary = pipeline.coverage_summary(dets, ctrl)
+            if summary:
+                print(f"  {summary}")
+            _save_annotated_frame(result.sensor_data.rgb, dets, ctrl.step_count, frames_dir)
 
         while True:
             try:
@@ -332,13 +379,21 @@ def run(scene: str = "FloorPlan1", width: int = 800, height: int = 600,
                 continue
 
             if head == "detect":
-                dets = pipeline.process(result.sensor_data.rgb, controller=ctrl)
+                dets = pipeline.process(result.sensor_data.rgb, controller=ctrl,
+                                        clip_targets=clip_detect_targets,
+                                        clip_detect_threshold=clip_detect_threshold,
+                                        clip_detect_iou=clip_detect_iou)
                 _print_detections(dets)
+                summary = pipeline.coverage_summary(dets, ctrl)
+                if summary:
+                    print(f"  {summary}")
+                _save_annotated_frame(result.sensor_data.rgb, dets, ctrl.step_count, frames_dir)
                 continue
 
             if head == "clip":
                 if use_clip:
                     verifier = None
+                    clip_detector = None
                     use_clip = False
                 else:
                     try:
@@ -348,14 +403,19 @@ def run(scene: str = "FloorPlan1", width: int = 800, height: int = 600,
                     except ImportError as e:
                         print(f"  CLIP unavailable: {e}")
                         continue
-                pipeline = PerceptionPipeline(detector, depth, verifier=verifier, prior=prior)
+                if clip_detect_targets and verifier is not None:
+                    from src.perception.verifier import CLIPDetector
+                    clip_detector = CLIPDetector(verifier=verifier)
+                pipeline = PerceptionPipeline(detector, depth, verifier=verifier,
+                                              prior=prior, clip_detector=clip_detector)
                 print(f"  CLIP: {'ON' if use_clip else 'OFF'}")
                 continue
 
             if head == "prior":
                 use_prior = not use_prior
                 prior = ScenePrior(ctrl.scene_name) if use_prior else None
-                pipeline = PerceptionPipeline(detector, depth, verifier=verifier, prior=prior)
+                pipeline = PerceptionPipeline(detector, depth, verifier=verifier,
+                                              prior=prior, clip_detector=clip_detector)
                 room = prior.room_type if prior else "unknown"
                 print(f"  Prior: {'ON' if use_prior else 'OFF'}  (room={room})")
                 continue
@@ -373,8 +433,15 @@ def run(scene: str = "FloorPlan1", width: int = 800, height: int = 600,
                 print(f"  [{ctrl.step_count:03d}] ({p.x:5.2f},{p.y:4.2f},{p.z:5.2f})  "
                       f"head={result.agent_state.heading_deg:.0f} deg  [{status}]")
                 if auto_detect:
-                    dets = pipeline.process(result.sensor_data.rgb, controller=ctrl)
+                    dets = pipeline.process(result.sensor_data.rgb, controller=ctrl,
+                                            clip_targets=clip_detect_targets,
+                                            clip_detect_threshold=clip_detect_threshold,
+                                            clip_detect_iou=clip_detect_iou)
                     _print_detections(dets)
+                    summary = pipeline.coverage_summary(dets, ctrl)
+                    if summary:
+                        print(f"  {summary}")
+                    _save_annotated_frame(result.sensor_data.rgb, dets, ctrl.step_count, frames_dir)
                 continue
 
             print(f"  Unknown: '{head}'.  Try: wasd / detect / clip / prior / auto / info / quit")
@@ -385,6 +452,12 @@ def run(scene: str = "FloorPlan1", width: int = 800, height: int = 600,
             print(f"  Video saved -> {path}")
         except Exception as exc:
             print(f"  Video export failed: {exc}")
+        try:
+            d = collector.export_frames()
+            count = len([f for f in os.listdir(d) if f.endswith(".png")])
+            print(f"  Annotated frames: {count} -> {d}/")
+        except Exception as exc:
+            print(f"  Frame export failed: {exc}")
     print(f"  Session dir: {collector.session_dir}")
 
 
@@ -398,17 +471,28 @@ def main():
     p.add_argument("--confidence", type=float, default=0.3,
                    help="YOLO confidence threshold (default: 0.3)")
     p.add_argument("--clip", action="store_true",
-                   help="Enable CLIP verification")
+                   help="Enable CLIP verification (re-scores YOLO detections)")
+    p.add_argument("--clip-detect", type=str, default=None,
+                   help="CLIP zero-shot detection targets, comma-separated "
+                        "(e.g. 'door,window,cabinet')")
+    p.add_argument("--clip-detect-threshold", type=float, default=0.28,
+                   help="CLIP zero-shot detection score threshold (default: 0.28)")
+    p.add_argument("--clip-detect-iou", type=float, default=0.5,
+                   help="CLIP zero-shot detection NMS IoU threshold (default: 0.5)")
     p.add_argument("--no-prior", action="store_true",
                    help="Disable scene prior weighting")
     p.add_argument("--clip-threshold", type=float, default=0.0,
                    help="CLIP score filter threshold (default: 0.0 = no filter)")
     p.add_argument("--classes", default=None,
-                   help="Path to classes.yaml (for --check-classes)")
+                   help="Path to classes.yaml (for --check-classes or --yolo-world)")
     p.add_argument("--check-classes", action="store_true",
                    help="Diagnostic: list all objects in the scene and their class mapping status")
     p.add_argument("--verify-labels", action="store_true",
                    help="Collect a few frames with auto-labels and save annotated images for inspection")
+    p.add_argument("--yolo-world", action="store_true",
+                   help="Use YOLO-World (open-vocabulary) instead of standard YOLO. "
+                        "Set --model to a YOLO-World variant (e.g. yolov8s-worldv2.pt). "
+                        "Automatically loads class vocabulary from classes.yaml.")
     args = p.parse_args()
 
     if args.check_classes:
@@ -419,10 +503,19 @@ def main():
         _verify_labels(args.scene, args.classes)
         return
 
+    clip_detect_targets = None
+    if args.clip_detect:
+        clip_detect_targets = [t.strip() for t in args.clip_detect.split(",") if t.strip()]
+
     run(scene=args.scene, width=args.width, height=args.height,
         model=args.model, confidence=args.confidence,
         use_clip=args.clip, use_prior=not args.no_prior,
-        clip_threshold=args.clip_threshold)
+        clip_threshold=args.clip_threshold,
+        clip_detect_targets=clip_detect_targets,
+        clip_detect_threshold=args.clip_detect_threshold,
+        clip_detect_iou=args.clip_detect_iou,
+        yolo_world=args.yolo_world,
+        yolo_world_classes=args.classes)
 
 
 if __name__ == "__main__":

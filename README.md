@@ -4,15 +4,22 @@
 
 ## 项目状态
 
-**Phase 2 已完成** — 感知管道 + 微调全流程跑通，进入 Phase 3 决策模块开发。
+**Phase 4 完成** — GeoAnchor 几何锚定 + 障碍物绕行优化 + SPL 指标 + 评估体系修复。
+
+最新评估（20 场景 × 10 任务，空间记忆过滤）：
+
+| Policy              | All      | Nav      | Int      | SPL    | Steps    | Time
+| ────────────── | ──────── | ──────── | ──────── | ────── | ─────── | ───────
+| Rule               | 51.5%    | 67.5%    | 27.5%    | 0.485  | 11.2    | 3.9s
+| Rule+VLM           | 53.0%    | 68.3%    | 30.0%    | 0.494  | 10.6    | 3.7s
 
 | Phase | 内容 | 状态 |
 |-------|------|------|
 | Phase 1 | 场景控制 + A\* 寻路 + RGB 采集 + 手动 Demo | ✅ 完成 |
 | Phase 2 | YOLO 检测 + 距离估计 + CLIP 验证 + 微调训练 | ✅ 完成 (mAP@0.5: 0.027 → 0.672) |
-| Phase 3 | 决策模块 (Rule Policy + LLM Policy) | ❌ 未开始 |
-| Phase 4 | Episode Runner + 评估指标 (SR, SPL) + 可视化 | ❌ 未开始 |
-| Phase 5 | 端到端集成 + 批量实验 | ❌ 未开始 |
+| Phase 3 | 决策模块 — Rule + VLM 多模态 + 时序滤波 + 批量评估 | ✅ 完成 |
+| Phase 4 | GeoAnchor + 障碍物绕行 + SPL + 评估修复 + 20 场景验证 | ✅ 完成 |
+| Phase 5 | 端到端集成 + 演示视频 | ❌ 未开始 |
 
 详见 [`docs/开发日志.md`](docs/开发日志.md)
 
@@ -30,22 +37,41 @@ embodied-agent/
 │   │   ├── prior.py         #   场景先验（房间类型加权）
 │   │   ├── pipeline.py      #   感知管道（组合以上模块）
 │   │   ├── class_config.py  #   YAML 类别配置加载
+│   │   ├── geo_anchor.py      #   GeometricAnchor — 3D 位置锁定 (Phase 4)
+│   │   ├── spatial_memory.py  #   SpatialMemory — 视觉空间记忆 (Phase 4)
+│   │   ├── eval_detectors.py  #   检测器对比评估
+│   │   ├── eval_task.py       #   任务级感知评估
 │   │   └── finetune/        #   微调工具
-│   │       ├── collect.py   #     数据采集（AI2-THOR 实例分割 → YOLO 标注）
-│   │       ├── eval.py      #     模型评估（mAP / Precision / Recall）
+│   │       ├── collect.py   #     数据采集
+│   │       ├── eval.py      #     模型评估
 │   │       └── train.py     #     YOLO 微调训练
 │   ├── common/              # 共享
 │   │   ├── types.py         #   数据类型 (Vec3, Detection, ActionResult...)
 │   │   └── logger.py        #   日志
+│   ├── decision/            # 决策模块
+│   │   ├── base.py          #   DecisionPolicy 抽象基类
+│   │   ├── types.py         #   TaskSpec / ActionDecision 数据类型
+│   │   ├── parser.py        #   TaskParser — NL 指令 → TaskSpec
+│   │   ├── rule_policy.py   #   RulePolicy — 规则策略 + GeoAnchor
+│   │   ├── llm_policy.py    #   LLMPolicy — VLM 多模态驱动
+│   │   ├── eval_policy.py   #   Policy 评估（导航任务）
+│   │   └── eval_full.py     #   完整评估（导航+交互，Rule vs Rule+VLM vs LLM）
 │   ├── recording/           # RGB 采集
 │   │   └── collector.py     #   FrameCollector (帧记录 + 视频/PNG 导出)
 │   └── cli/                 # 命令行入口
 │       ├── manual.py        #   手动控制 Demo (wasd 移动 + A* 导航 + detect)
-│       └── perceive.py      #   感知专用 Demo (YOLO + CLIP + 场景先验)
+│       ├── perceive.py      #   感知专用 Demo (YOLO + CLIP + 场景先验)
+│       └── decide.py        #   决策模块 Demo (NL 指令 → 动作执行)
 ├── config/
 │   └── classes.yaml         # 类别定义 (COCO 80 + AI2-THOR 扩展, 114 类)
 ├── docs/
-│   ├── 开发日志.md           # 开发日志
+│   ├── 开发日志.md           # 开发日志 (Phase 1-4)
+│   ├── 开题报告.md           # 开题报告
+│   ├── 操作手册.md           # 操作手册
+│   ├── 实验报告-感知模块.md   # Phase 2 实验报告
+│   ├── 实验报告-决策模块.md   # Phase 3/4 实验报告
+│   ├── 实验报告-控制模块.md   # Phase 1 实验报告
+│   ├── 控制模块-问题解决.md   # 控制模块问题修复记录
 │   ├── bugfix/              #   问题修复记录
 │   └── superpowers/         #   原始设计文档
 ├── remembr-main/            # 参考项目 (NVIDIA ReMEmbR)
@@ -59,22 +85,23 @@ embodied-agent/
 ```
 用户 NL 指令
     ↓
-[TaskParser] → TaskSpec             ← Phase 3 待实现
+[TaskParser] → TaskSpec
     ↓                           task_type: "navigation" | "interaction"
 AI2-THOR → Observation(rgb, position, heading)
     ↓
-[YOLODetector] → detections[]
+[PerceptionPipeline]
+    ├── [YOLODetector / YOLOWorldDetector / HybridDetector]
+    ├── [CLIPVerifier] + [ScenePrior] → verified detections
+    └── [DepthEstimator] → distance_level (NEAR/MEDIUM/FAR) + distance_meters
     ↓
-[CLIPVerifier] + [ScenePrior] → verified detections
-    ↓
-[DepthEstimator] → distance_level (NEAR/MEDIUM/FAR) + distance_meters
-    ↓
-[DecisionPolicy] → ActionDecision   ← Phase 3 待实现
+[DecisionPolicy] → ActionDecision
+    ├── RulePolicy    (规则驱动)
+    └── LLMPolicy    (VLM 驱动)
     ↓
 [ThorController] → 执行动作
-    ↓   导航: MOVE_FORWARD / TURN_LEFT / TURN_RIGHT / STOP
+    ↓   导航: MOVE_FORWARD / TURN_LEFT / TURN_RIGHT / STOP / NAVIGATE_TO (A*)
     ↓   交互: INTERACT_OPEN / INTERACT_PICKUP / INTERACT_TOGGLE
-循环 → [EpisodeRunner] → EpisodeResult(success, spl, ...) ← Phase 4 待实现
+循环 → [EpisodeRunner] → (success, steps, reason)
 ```
 
 ### 任务类型
@@ -130,6 +157,15 @@ python src/cli/perceive.py --scene FloorPlan1
 # 感知 Demo（使用微调后模型）
 python src/cli/perceive.py --model runs/detect/runs/train/weights/best.pt --scene FloorPlan11
 
+# 决策 Demo（Rule Policy — 无需 API Key）
+python src/cli/decide.py --task "Go to the chair" --policy rule --scene FloorPlan1
+
+# 决策 Demo（LLM Policy — 需要 OPENAI_API_KEY）
+python src/cli/decide.py --task "Open the fridge" --policy llm --scene FloorPlan1
+
+# 决策 Demo（交互模式）
+python src/cli/decide.py --scene FloorPlan1
+
 # 诊断：检查场景物体映射
 python src/cli/perceive.py --check-classes --scene FloorPlan1
 
@@ -147,6 +183,12 @@ python src/perception/finetune/train.py --data data/data.yaml --epochs 50
 
 # 微调后评估（注意：实际路径可能嵌套，检查 runs/ 目录确认）
 python src/perception/finetune/eval.py --model runs/detect/runs/train/weights/best.pt --num-scenes 5
+
+# 检测器对比评估（Per-frame IoU）
+python -m src.perception.eval_detectors --scenes 3 --steps 100
+
+# 任务级评估（Navigation Success Rate）
+python -m src.perception.eval_task --scenes FloorPlan1,FloorPlan3,FloorPlan5
 ```
 
 > **注意**: 所有命令必须在项目根目录运行，否则 YOLO 的输出路径可能嵌套（如 `runs/detect/runs/train/` 而非 `runs/train/`）。

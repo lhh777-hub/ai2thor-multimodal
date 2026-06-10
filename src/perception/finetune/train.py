@@ -39,8 +39,6 @@ def train(data_yaml: str, base_model: str = "yolov8n.pt",
 
     Set *resume=True* to continue from the last saved checkpoint.
     """
-    from ultralytics import YOLO
-
     if resume:
         checkpoint = os.path.join(project, name, "weights", "last.pt")
         logger.info("Resuming from: %s", checkpoint)

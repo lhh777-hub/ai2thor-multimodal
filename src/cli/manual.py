@@ -43,6 +43,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspa
 from src.controller.thor import ThorController
 from src.recording.collector import FrameCollector
 from src.common.logger import setup_logger
+from src.common.utils import draw_annotations
 
 logger = setup_logger("manual")
 
@@ -156,6 +157,8 @@ def _get_pipeline():
             HeuristicDepth(),
         )
     return _pipeline
+
+
 
 
 def _print_detections(detections, img_w: int) -> None:
@@ -326,6 +329,13 @@ def run(scene: str = "FloorPlan1", width: int = 800, height: int = 600) -> None:
                 try:
                     dets = pipeline.process(result.sensor_data.rgb, controller=ctrl)
                     _print_detections(dets, width)
+                    # Save annotated frame with detection bboxes
+                    annotated = draw_annotations(result.sensor_data.rgb, dets)
+                    os.makedirs(os.path.join(collector.session_dir, "frames"), exist_ok=True)
+                    fpath = os.path.join(collector.session_dir, "frames",
+                                         f"detect_{collector.frame_count:04d}.png")
+                    cv2.imwrite(fpath, cv2.cvtColor(annotated, cv2.COLOR_RGB2BGR))
+                    print(f"  Annotated frame saved -> {fpath}")
                 except Exception as e:
                     print(f"  Detection failed: {e}")
                 continue
@@ -418,6 +428,12 @@ def run(scene: str = "FloorPlan1", width: int = 800, height: int = 600) -> None:
             print(f"  Trajectory video saved -> {path}")
         except Exception as exc:
             print(f"  Video export failed: {exc}")
+        try:
+            d = collector.export_frames()
+            count = len([f for f in os.listdir(d) if f.endswith(".png")])
+            print(f"  Annotated frames: {count} -> {d}/")
+        except Exception as exc:
+            print(f"  Frame export failed: {exc}")
     print(f"  Session dir: {collector.session_dir}")
     print("  Controller closed.")
 

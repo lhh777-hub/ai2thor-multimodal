@@ -25,10 +25,108 @@ _NEAR_LIMIT = 1.5   # ≤ 1.5 m  → NEAR
 _FAR_LIMIT  = 3.0   # ≥ 3.0 m  → FAR  (1.5–3.0 → MEDIUM)
 
 
-def _level_from_metres(metres: float) -> str:
-    if metres <= _NEAR_LIMIT:
+# Typical real-world sizes in metres (longest dimension).
+# HeuristicDepth uses these per-class instead of a single assumed_size,
+# which dramatically improves distance accuracy.
+_OBJECT_SIZES: dict[str, float] = {
+    # Large furniture / appliances (≥ 0.8 m)
+    "refrigerator": 1.8, "fridge": 1.8,
+    "bed": 2.0,
+    "couch": 2.0, "sofa": 2.0,
+    "dining table": 1.5,
+    "bathtub": 1.2,
+    "wardrobe": 1.0,
+    "oven": 0.9,
+    "tv": 0.9, "television": 0.9,
+    "bookshelf": 0.9,
+    "cabinet": 0.8,
+    "shelf": 0.8,
+    "curtain": 0.7,
+    "sink": 0.7,
+    "mirror": 0.6,
+    "toilet": 0.6,
+    "suitcase": 0.6,
+    "counter": 0.8,
+    "countertop": 0.8,
+
+    # Medium objects (0.3 – 0.7 m)
+    "chair": 0.5, "armchair": 0.6,
+    "microwave": 0.4,
+    "laptop": 0.35,
+    "keyboard": 0.4,
+    "backpack": 0.4,
+    "potted plant": 0.5,
+    "vase": 0.3,
+    "teddy bear": 0.3,
+    "sports ball": 0.22,
+    "handbag": 0.3,
+    "umbrella": 0.4,
+    "tennis racket": 0.5,
+    "baseball bat": 0.7,
+    "skateboard": 0.6,
+    "surfboard": 1.5,
+    "broom": 0.9,
+    "mop": 0.9,
+    "vacuum": 0.4,
+    "trash can": 0.4,
+    "garbage bin": 0.4,
+    "pillow": 0.4,
+    "towel": 0.5,
+    "lamp": 0.4,
+    "toaster": 0.25,
+    "stool": 0.35,
+
+    # Small objects (< 0.3 m)
+    "cup": 0.1, "mug": 0.1,
+    "bottle": 0.2, "wine bottle": 0.3,
+    "bowl": 0.15,
+    "book": 0.2,
+    "cell phone": 0.08, "phone": 0.08,
+    "apple": 0.08,
+    "banana": 0.15,
+    "orange": 0.08,
+    "sandwich": 0.15,
+    "donut": 0.08,
+    "cake": 0.2,
+    "carrot": 0.12,
+    "hot dog": 0.12,
+    "pizza": 0.3,
+    "knife": 0.25,
+    "spoon": 0.18,
+    "fork": 0.18,
+    "wine glass": 0.2,
+    "mouse": 0.06,
+    "remote": 0.15,
+    "clock": 0.2,
+    "scissors": 0.18,
+    "pen": 0.12,
+    "candle": 0.1,
+    "soap": 0.08,
+    "sponge": 0.1,
+    "credit card": 0.06,
+    "paper": 0.3,
+    "newspaper": 0.35,
+    "plate": 0.25,
+    "pan": 0.3,
+    "pot": 0.3, "cooking pot": 0.3,
+    "kettle": 0.25,
+    "teapot": 0.2,
+    "box": 0.3,
+    "tissue box": 0.15,
+    "shoe": 0.25,
+    "glasses": 0.12,
+    "watch": 0.04,
+    "key": 0.05,
+    "hair drier": 0.2,
+    "toothbrush": 0.15,
+}
+
+
+def _level_from_metres(metres: float, near_limit: float = _NEAR_LIMIT,
+                       far_limit: float = _FAR_LIMIT) -> str:
+    if metres <= near_limit:
         return "NEAR"
-    elif metres <= _FAR_LIMIT:
+    elif metres <= far_limit:
         return "MEDIUM"
     return "FAR"
 
@@ -58,19 +156,22 @@ class HeuristicDepth(DepthEstimator):
     size of *assumed_size* metres.
     """
 
-    def __init__(self, assumed_size: float = 0.4,
+    def __init__(self, default_size: float = 0.4,
                  near_limit: float = _NEAR_LIMIT,
                  far_limit: float = _FAR_LIMIT,
                  fov_deg: float = 90.0):
-        self.assumed_size = assumed_size
+        self.default_size = default_size
         self.near_limit = near_limit
         self.far_limit = far_limit
         self.fov_deg = fov_deg
 
     def estimate(self, rgb: np.ndarray, detection: Detection) -> tuple[str, float]:
         metres = self._estimate_metres(rgb, detection)
-        level = _level_from_metres(metres)
-        logger.debug("%s: %.2f m → %s", detection.label, metres, level)
+        level = _level_from_metres(metres, self.near_limit, self.far_limit)
+        logger.debug("%s: %.2f m (size=%.2f) → %s",
+                     detection.label, metres,
+                     _OBJECT_SIZES.get(detection.label, self.default_size),
+                     level)
         return level, metres
 
     def _estimate_metres(self, rgb: np.ndarray, detection: Detection) -> float:
@@ -78,16 +179,22 @@ class HeuristicDepth(DepthEstimator):
 
             distance = (real_size × focal_px) / bbox_height_px
 
-        *focal_px* is derived from the vertical FOV and image height.
+        Uses a per-class assumed size when available; falls back to
+        *default_size* for unknown classes.
         """
         img_h = rgb.shape[0]
         bbox_h = detection.bbox.height
         if bbox_h <= 0:
             return 0.0
 
+        # Per-class object size, with case-insensitive fallback
+        assumed = _OBJECT_SIZES.get(detection.label)
+        if assumed is None:
+            assumed = _OBJECT_SIZES.get(detection.label.lower(), self.default_size)
+
         fov_rad = math.radians(self.fov_deg)
         focal_px = (img_h / 2.0) / math.tan(fov_rad / 2.0)
-        metres = (self.assumed_size * focal_px) / bbox_h
+        metres = (assumed * focal_px) / bbox_h
         return round(float(metres), 2)
 
 
