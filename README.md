@@ -47,21 +47,30 @@ embodied-agent/
 │   │       └── train.py     #     YOLO 微调训练
 │   ├── common/              # 共享
 │   │   ├── types.py         #   数据类型 (Vec3, Detection, ActionResult...)
-│   │   └── logger.py        #   日志
+│   │   ├── logger.py        #   日志
+│   │   └── utils.py         #   公共工具 (img_to_b64, draw_annotations, box_iou...)
 │   ├── decision/            # 决策模块
 │   │   ├── base.py          #   DecisionPolicy 抽象基类
 │   │   ├── types.py         #   TaskSpec / ActionDecision 数据类型
 │   │   ├── parser.py        #   TaskParser — NL 指令 → TaskSpec
 │   │   ├── rule_policy.py   #   RulePolicy — 规则策略 + GeoAnchor
 │   │   ├── llm_policy.py    #   LLMPolicy — VLM 多模态驱动
-│   │   ├── eval_policy.py   #   Policy 评估（导航任务）
-│   │   └── eval_full.py     #   完整评估（导航+交互，Rule vs Rule+VLM vs LLM）
+│   │   ├── eval_full.py     #   统一评估入口 (--mode quick|demo|full)
+│   │   ├── eval_policy.py   #   → eval_full --mode quick 的薄包装器
+│   │   ├── eval_demo.py     #   → eval_full --mode demo 的薄包装器
+│   │   ├── trace.py         #   轨迹记录 (StepRecord, EpisodeTrace)
+│   │   └── visualize.py     #   轨迹可视化 + 失败分析报告
 │   ├── recording/           # RGB 采集
 │   │   └── collector.py     #   FrameCollector (帧记录 + 视频/PNG 导出)
 │   └── cli/                 # 命令行入口
 │       ├── manual.py        #   手动控制 Demo (wasd 移动 + A* 导航 + detect)
 │       ├── perceive.py      #   感知专用 Demo (YOLO + CLIP + 场景先验)
 │       └── decide.py        #   决策模块 Demo (NL 指令 → 动作执行)
+├── scripts/                 # 辅助脚本
+│   ├── capture_detections.py #   检测结果可视化截图
+│   ├── demo_geo_anchor.py   #   GeoAnchor 几何锚定演示
+│   ├── demo_no_anchor.py    #   无锚定对比演示
+│   └── interactive_anchor.py #  交互式锚定调试工具
 ├── config/
 │   └── classes.yaml         # 类别定义 (COCO 80 + AI2-THOR 扩展, 114 类)
 ├── docs/
@@ -74,8 +83,7 @@ embodied-agent/
 │   ├── 控制模块-问题解决.md   # 控制模块问题修复记录
 │   ├── bugfix/              #   问题修复记录
 │   └── superpowers/         #   原始设计文档
-├── remembr-main/            # 参考项目 (NVIDIA ReMEmbR)
-├── weights/                 # 模型权重 (yolov8n.pt / yolov8m.pt)
+├── weights/                 # 模型权重 (yolov8n.pt / yolov8m.pt, gitignored)
 ├── outputs/                 # 运行输出
 └── requirements.txt
 ```
@@ -187,8 +195,29 @@ python src/perception/finetune/eval.py --model runs/detect/runs/train/weights/be
 # 检测器对比评估（Per-frame IoU）
 python -m src.perception.eval_detectors --scenes 3 --steps 100
 
-# 任务级评估（Navigation Success Rate）
+# 任务级感知评估
 python -m src.perception.eval_task --scenes FloorPlan1,FloorPlan3,FloorPlan5
+
+# ===== 策略评估（统一入口 eval_full.py）=====
+
+# 快速评估：nav-only, Rule 单策略, 3 场景 × 10 任务
+python -m src.decision.eval_full --mode quick --scenes 3 --tasks 10
+
+# Demo 评估：精选显眼物体, 混合 nav+interact, 含轨迹图
+python -m src.decision.eval_full --mode demo --scenes 5 --tasks-per-scene 10 --policies rule
+
+# 完整评估：多策略对比, 空间记忆, 详细轨迹
+python -m src.decision.eval_full --mode full --policies rule,rule+vlm --scenes 5 --tasks 20
+
+# 完整评估：三策略全对比
+python -m src.decision.eval_full --mode full --policies rule,rule+vlm,llm --scenes 3 --tasks 10
+
+# 指定场景列表
+python -m src.decision.eval_full --mode full --scene-list FloorPlan1,FloorPlan3,FloorPlan5 --policies rule,llm
+
+# 旧命令仍然可用（薄包装器自动转发到 eval_full）
+python -m src.decision.eval_policy --scenes 3 --tasks 10          # → --mode quick
+python -m src.decision.eval_demo --scenes 5 --tasks-per-scene 10  # → --mode demo
 ```
 
 > **注意**: 所有命令必须在项目根目录运行，否则 YOLO 的输出路径可能嵌套（如 `runs/detect/runs/train/` 而非 `runs/train/`）。
