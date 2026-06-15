@@ -909,9 +909,9 @@ def _room_tour(ctrl, pipeline, *, num_stops: int = 3, verbose: bool = True
             print(f"    stop {i+1}/{len(stops)}: +{len(labels)} labels → "
                   f"running total {len(all_labels)}")
 
-    # Walk back toward center (first stop was farthest, last is nearest to center)
-    if stops:
-        for _ in ctrl.navigate_to(stops[0]):
+    # Walk back toward center (last stop is nearest to centroid)
+    if len(stops) >= 2:
+        for _ in ctrl.navigate_to(stops[-1]):
             pass
 
     # Check target visibility
@@ -1241,6 +1241,14 @@ def main():
 
         # --- Room tour: build spatial memory once for this scene ---
         spatial_memory = _prescan_and_report(ctrl, pipeline, "", verbose=True)
+
+        # Reload scene to reset agent to spawn position (room tour leaves
+        # agent at a far corner often facing a wall).  Spatial memory is
+        # pure Python state — unaffected by scene reload.
+        ctrl.load_scene(args.scene)
+        view = ctrl.get_current_view()
+        if collector is not None:
+            collector.record(view)
 
         objects = len(ctrl.get_object_map())
         tag = f" ({args.detector})" if args.detector != "finetuned" else ""

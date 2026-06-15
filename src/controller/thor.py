@@ -451,8 +451,15 @@ class ThorController:
         verb = action.removeprefix("INTERACT_")
         if verb == "OPEN":
             return self._ctrl.step(action="OpenObject", objectId=self._find_visible_with("openable"))
+        if verb == "CLOSE":
+            return self._ctrl.step(action="CloseObject", objectId=self._find_visible_with("openable"))
         if verb == "PICKUP":
             return self._ctrl.step(action="PickupObject", objectId=self._find_visible_with("pickupable"))
+        if verb == "DROP":
+            # Find a nearby surface (counter, table, shelf) and place the
+            # held object there.  Falls back to DropHandObject if no surface
+            # is found or no object is currently held.
+            return self._put_on_surface()
         if verb == "TOGGLE":
             obj_id = self._find_visible_with("toggleable")
             for obj in self._ctrl.last_event.metadata["objects"]:
@@ -461,21 +468,82 @@ class ThorController:
                     return self._ctrl.step(action=toggle, objectId=obj_id)
         return self._ctrl.last_event
 
-    def _find_visible_with(self, prop: str) -> str:
-        """Return the objectId of the best visible object with *prop*.
+    def _put_on_surface(self) -> Any:
+        """Place the held object on the nearest counter/table/shelf surface.
 
-        Prefers objects whose AI2-THOR type maps to *_interact_target*
-        (set by the decision loop before INTERACT_* actions).  Falls back
-        to the nearest visible object.
+        Uses AI2-THOR ``PutObject`` at the surface position (with a small
+        height offset so the object sits on top).  Falls back to
+        ``DropHandObject`` if nothing is held or no surface is found.
         """
-        candidates = []
-        ax, az = self.agent_state.position.x, self.agent_state.position.z
+        # Find the held object
+        held = None
         for obj in self._ctrl.last_event.metadata["objects"]:
-            if obj.get("visible") and obj.get(prop):
-                ox, oz = obj["position"]["x"], obj["position"]["z"]
-                d = (ax - ox) ** 2 + (az - oz) ** 2
-                candidates.append((d, obj))
+            if obj.get("isPickedUp"):
+                held = obj
+                break
+        if held is None:
+            return self._ctrl.step(action="DropHandObject")
 
+        # Find the nearest surface: CounterTop, DiningTable, Desk, Shelf, etc.
+        SURFACE_TYPES = {
+            "CounterTop", "DiningTable", "Desk", "CoffeeTable",
+            "SideTable", "Table", "Shelf", "ShelvingUnit",
+            "TVStand", "Cabinet", "Drawer",
+        }
+        ax, az = self.agent_state.position.x, self.agent_state.position.z
+        best_surface = None
+        best_dist = float("inf")
+        for obj in self._ctrl.last_event.metadata["objects"]:
+            if obj["objectType"] not in SURFACE_TYPES:
+                continue
+            ox, oz = obj["position"]["x"], obj["position"]["z"]
+            d = (ax - ox) ** 2 + (az - oz) ** 2
+            if d < best_dist:
+                best_dist = d
+                best_surface = obj
+
+        if best_surface is None:
+            return self._ctrl.step(action="DropHandObject")
+
+        # Place on top of the surface.
+        # AI2-THOR PutObject(x, z) uses floor-plane coordinates; the physics
+        # engine handles the vertical placement (object lands on the surface).
+        sp = best_surface["position"]
+        import random
+        ox = sp["x"] + random.uniform(-0.15, 0.15)
+        oz = sp["z"] + random.uniform(-0.15, 0.15)
+
+        return self._ctrl.step(
+            action="PutObject",
+            x=ox, y=oz,
+            forceAction=True,
+            putNearXY=True,
+        )
+
+    def _find_visible_with(self, prop: str) -> str:
+        """Return the objectId of the best object with *prop*.
+
+        Visible objects are preferred.  If none are visible, searches ALL
+        objects with the property (necessary when the agent is too close —
+        e.g. after opening a fridge, the door may occlude the object).
+        Falls back to the nearest candidate.
+        """
+        ax, az = self.agent_state.position.x, self.agent_state.position.z
+        visible_candidates: list[tuple[float, dict]] = []
+        all_candidates: list[tuple[float, dict]] = []
+
+        for obj in self._ctrl.last_event.metadata["objects"]:
+            if not obj.get(prop):
+                continue
+            ox, oz = obj["position"]["x"], obj["position"]["z"]
+            d = (ax - ox) ** 2 + (az - oz) ** 2
+            entry = (d, obj)
+            all_candidates.append(entry)
+            if obj.get("visible"):
+                visible_candidates.append(entry)
+
+        # Prefer visible; fall back to ALL (e.g. close fridge after opening)
+        candidates = visible_candidates if visible_candidates else all_candidates
         if not candidates:
             return ""
 

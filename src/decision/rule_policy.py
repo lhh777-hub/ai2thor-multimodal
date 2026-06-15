@@ -169,6 +169,16 @@ class RulePolicy(DecisionPolicy):
         if matched is not None:
             return self._perception_guided(matched, agent_state, task)
 
+        # --- Interaction + zero detections: agent is likely too close to a
+        #     large surface (e.g. fridge).  Try the interaction directly. ---
+        if task.is_interaction and not detections:
+            return ActionDecision(
+                action=f"INTERACT_{task.interact_action}",
+                done=True, confidence=0.7,
+                reason=f"No detections — trying {task.interact_action} on "
+                       f"'{task.target}' directly.",
+            )
+
         # --- Step 3: not found → check memory → scan → fallback to A* ---
         return self._handle_not_found(target, detections, spatial_memory)
 
@@ -380,7 +390,11 @@ class RulePolicy(DecisionPolicy):
     def _handle_not_found(self, target: str, detections: list[Detection] | None = None,
                            spatial_memory: object | None = None) -> ActionDecision:
         # --- Spatial memory: primary navigation source (quick win) ---
-        if spatial_memory is not None:
+        # Guard: if NO detections at all, the agent is probably too close
+        # to a large surface (e.g. fridge) and can't see anything.  Don't
+        # trust spatial memory in this case — rotate to get a view first.
+        n_dets = len(detections) if detections else 0
+        if n_dets > 0 and spatial_memory is not None:
             mem_pos = spatial_memory.lookup(target)
             if mem_pos is not None:
                 self._state.scan_counter = 0

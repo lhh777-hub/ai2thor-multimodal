@@ -13,9 +13,11 @@ _INTERACT_VERBS: list[tuple[str, str]] = [
     ("switch off", "TOGGLE"),
     ("toggle on", "TOGGLE"),
     ("toggle off", "TOGGLE"),
+    ("put down", "DROP"),
     # Single-word verbs
     ("open",   "OPEN"),
-    ("close",  "OPEN"),       # closing = same AI2-THOR action on openable objects
+    ("drop",   "DROP"),
+    ("close",  "CLOSE"),
     ("pick up", "PICKUP"),
     ("pick",   "PICKUP"),
     ("take",   "PICKUP"),
